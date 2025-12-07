@@ -269,7 +269,6 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     return new Response("Newsletter not found", { status: 404 });
   }
 
-  // Parse metadata
   let subject = "Money Stuff";
   if (metaJson) {
     try {
@@ -278,7 +277,6 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     } catch {}
   }
 
-  // Extract preview text
   const textContent = html
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
@@ -288,8 +286,10 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     .replace(/^(Money Stuff:\s*|Fwd:\s*)/gi, "")
     .trim();
 
-  // OG meta tags for social sharing
-  const ogTags = `
+  const headContent = `
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="light only">
     <meta property="og:title" content="${escapeHtml(cleanSubject)}">
     <meta property="og:description" content="${escapeHtml(preview)}">
     <meta property="og:type" content="article">
@@ -301,27 +301,50 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     <meta name="twitter:description" content="${escapeHtml(preview)}">
     <meta name="twitter:image" content="https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iELnhicC0ZBk/v0/-1x-1.jpg">
     <title>${escapeHtml(cleanSubject)} - Levine Links</title>
+    <style>
+      :root { color-scheme: light only; }
+      html, body { background: #fff !important; color: #1a1a1a !important; }
+    </style>
   `;
 
   const backButton = `
-    <div style="position:sticky;top:0;z-index:1000;background:linear-gradient(180deg,#1a1a1a 0%,#2a2a2a 100%);padding:12px 20px;font-family:'Inter',-apple-system,sans-serif;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #444;box-shadow:0 2px 8px rgba(0,0,0,0.3);">
-      <a href="/" style="display:inline-flex;align-items:center;gap:8px;color:#fff;text-decoration:none;font-size:14px;font-weight:500;padding:8px 14px;background:rgba(255,255,255,0.1);border-radius:6px;transition:background 0.15s;">
-        <span style="font-size:16px;">←</span>
+    <div style="position:sticky;top:0;z-index:1000;background:#f8f8f8;padding:12px 20px;font-family:'Inter',-apple-system,sans-serif;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ddd;box-shadow:0 1px 4px rgba(0,0,0,0.08);">
+      <a href="/" style="display:inline-flex;align-items:center;gap:8px;color:#333;text-decoration:none;font-size:14px;font-weight:500;padding:8px 14px;background:#fff;border:1px solid #ddd;border-radius:6px;transition:background 0.15s;">
+        <span style="font-size:16px;">&larr;</span>
         <span>All Issues</span>
       </a>
-      <span style="color:#888;font-size:13px;">${formatDate(date)}</span>
+      <span style="color:#666;font-size:13px;">${formatDate(date)}</span>
     </div>`;
 
-  let wrappedHtml = html.includes("<head>")
-    ? html.replace(/<head>/i, `<head>${ogTags}`)
-    : `<head>${ogTags}</head>` + html;
+  // Build proper HTML document structure
+  let wrappedHtml: string;
 
-  wrappedHtml = wrappedHtml.includes("<body")
-    ? wrappedHtml.replace(/<body([^>]*)>/i, `<body$1>${backButton}`)
-    : backButton + wrappedHtml;
+  if (html.includes("<!DOCTYPE") || html.includes("<html")) {
+    // Has HTML structure - inject into existing head/body
+    wrappedHtml = html.includes("<head>")
+      ? html.replace(/<head>/i, `<head>${headContent}`)
+      : html.replace(/<html([^>]*)>/i, `<html$1><head>${headContent}</head>`);
+
+    wrappedHtml = wrappedHtml.includes("<body")
+      ? wrappedHtml.replace(/<body([^>]*)>/i, `<body$1>${backButton}`)
+      : wrappedHtml.replace(/<\/head>/i, `</head><body>${backButton}`) +
+        "</body>";
+  } else {
+    // No HTML structure - wrap entirely
+    wrappedHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>${headContent}</head>
+<body style="margin:0;padding:0;">
+${backButton}
+<div style="max-width:650px;margin:0 auto;padding:20px;">
+${html}
+</div>
+</body>
+</html>`;
+  }
 
   return new Response(wrappedHtml, {
-    headers: { "Content-Type": "text/html" },
+    headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }
 

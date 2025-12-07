@@ -5,6 +5,34 @@ export interface Env {
   RESEND_API_KEY: string;
   SITE_URL: string;
   SEED_EMAIL?: string;
+  // Service binding for parallel link fetching (each fetch() call = new execution context)
+  FETCHER: Fetcher;
+}
+
+// Fetcher batch request/response types
+export interface FetchBatchItem {
+  url: string;
+  text?: string;
+  fetchOgImage?: boolean;
+}
+
+export interface FetchBatchRequest {
+  items: FetchBatchItem[];
+  perplexityApiKey?: string;
+}
+
+export interface LinkFetchResult {
+  originalUrl: string;
+  resolvedUrl: string;
+  favicon?: string;
+  summary?: string;
+  archiveUrl?: string;
+  ogImage?: string;
+}
+
+export interface FetchBatchResponse {
+  results: LinkFetchResult[];
+  error?: string;
 }
 
 export interface ExtractedLink {
@@ -25,4 +53,3 @@ export interface ProcessedNewsletter {
   originalHtml: string;
   links: EnrichedLink[];
 }
-

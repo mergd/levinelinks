@@ -11,3 +11,8 @@ CREATE TABLE `newsletters` (
 CREATE UNIQUE INDEX `newsletters_date_unique` ON `newsletters` (`date`);
 
 
+
+
+
+
+

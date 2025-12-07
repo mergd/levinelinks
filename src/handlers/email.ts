@@ -50,74 +50,79 @@ async function processNewsletter(
   env: Env,
   sendToSubscribers: boolean = true
 ): Promise<void> {
-  const rawEmail = await streamToString(message.raw);
-  const parser = new PostalMime();
-  const parsed = await parser.parse(rawEmail);
+  try {
+    const rawEmail = await streamToString(message.raw);
+    const parser = new PostalMime();
+    const parsed = await parser.parse(rawEmail);
 
-  const rawHtml = parsed.html || parsed.text || "";
-  const originalHtml = stripForwardedHeaders(rawHtml);
-  // Strip "Fwd:" prefix from subject
-  const subject = (parsed.subject || "Money Stuff")
-    .replace(/^(Fwd?:\s*)+/gi, "")
-    .trim();
+    const rawHtml = parsed.html || parsed.text || "";
+    const originalHtml = stripForwardedHeaders(rawHtml);
+    // Strip "Fwd:" prefix from subject
+    const subject = (parsed.subject || "Money Stuff")
+      .replace(/^(Fwd?:\s*)+/gi, "")
+      .trim();
 
-  // Skip podcast emails
-  if (subject.toLowerCase().includes("the podcast")) {
-    console.log(`Skipping podcast email: ${subject}`);
-    return;
-  }
+    // Skip podcast emails
+    if (subject.toLowerCase().includes("the podcast")) {
+      console.log(`Skipping podcast email: ${subject}`);
+      return;
+    }
 
-  // Extract original newsletter date (not the forwarding date)
-  const date = extractNewsletterDate(rawHtml, parsed.date);
+    // Extract original newsletter date (not the forwarding date)
+    const date = extractNewsletterDate(rawHtml, parsed.date);
 
-  console.log(`Processing: ${subject} (${date})`);
+    console.log(`Processing: ${subject} (${date})`);
 
-  // Process up to 40 links (only paywalled sites trigger expensive API calls)
-  const result = await wrapNewsletter(originalHtml, env.PERPLEXITY_API_KEY, 40);
+    // Process all links (3 parallel fetchers handle subrequest limits)
+    const result = await wrapNewsletter(originalHtml, env);
 
-  await env.NEWSLETTERS.put(`${date}.html`, result.html);
-  await env.NEWSLETTERS.put(
-    `${date}.json`,
-    JSON.stringify({
-      date,
-      subject,
-      preview: result.preview,
-      ogImage: result.ogImage,
-      processedAt: new Date().toISOString(),
-    })
-  );
-
-  if (!sendToSubscribers) {
-    console.log(`Seeded: ${subject} (${date}) - not sending to subscribers`);
-    return;
-  }
-
-  const db = getDb(env.DB);
-  const allSubscribers = await db.select().from(subscribers);
-  const verifiedSubscribers = allSubscribers.filter((s) => s.verified);
-
-  console.log(`Sending to ${verifiedSubscribers.length} subscribers`);
-
-  const resend = createResendClient(env.RESEND_API_KEY);
-
-  for (const subscriber of verifiedSubscribers) {
-    const unsubscribeUrl = `${env.SITE_URL}/unsubscribe?token=${subscriber.unsubscribeToken}`;
-    const emailHtml = addFooter(
-      result.html,
-      env.SITE_URL,
-      date,
-      unsubscribeUrl
+    await env.NEWSLETTERS.put(`${date}.html`, result.html);
+    await env.NEWSLETTERS.put(
+      `${date}.json`,
+      JSON.stringify({
+        date,
+        subject,
+        preview: result.preview,
+        ogImage: result.ogImage,
+        processedAt: new Date().toISOString(),
+      })
     );
 
-    await resend.emails.send({
-      from: "Levine Links <newsletter@yet-to-be.com>",
-      to: subscriber.email,
-      subject,
-      html: emailHtml,
-    });
-  }
+    if (!sendToSubscribers) {
+      console.log(`Seeded: ${subject} (${date}) - not sending to subscribers`);
+      return;
+    }
 
-  console.log(`Done: ${subject} (${date})`);
+    const db = getDb(env.DB);
+    const allSubscribers = await db.select().from(subscribers);
+    const verifiedSubscribers = allSubscribers.filter((s) => s.verified);
+
+    console.log(`Sending to ${verifiedSubscribers.length} subscribers`);
+
+    const resend = createResendClient(env.RESEND_API_KEY);
+
+    for (const subscriber of verifiedSubscribers) {
+      const unsubscribeUrl = `${env.SITE_URL}/unsubscribe?token=${subscriber.unsubscribeToken}`;
+      const emailHtml = addFooter(
+        result.html,
+        env.SITE_URL,
+        date,
+        unsubscribeUrl
+      );
+
+      await resend.emails.send({
+        from: "Levine Links <newsletter@yet-to-be.com>",
+        to: subscriber.email,
+        subject,
+        html: emailHtml,
+      });
+    }
+
+    console.log(`Done: ${subject} (${date})`);
+  } catch (error) {
+    console.error(`❌ Error processing newsletter:`, error);
+    throw error;
+  }
 }
 
 function addFooter(
@@ -167,7 +172,10 @@ async function forwardEmail(
   console.log(`Forwarded: ${parsed.subject}`);
 }
 
-function extractNewsletterDate(html: string, fallbackDate?: Date): string {
+function extractNewsletterDate(
+  html: string,
+  fallbackDate?: Date | string
+): string {
   // Gmail forward format: "Date: Tue, Nov 25, 2025 at 10:42 AM"
   const gmailMatch = html.match(
     /Date:\s*(?:\w+,\s*)?(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})/i

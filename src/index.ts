@@ -1,9 +1,17 @@
 import { handleEmail } from "./handlers/email";
 import { handleFetch } from "./handlers/web";
+import { handleFetchBatch } from "./handlers/fetcher";
 import type { Env } from "./types";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    const url = new URL(request.url);
+
+    // Internal fetcher endpoint (called via service bindings)
+    if (url.pathname === "/_fetch-batch" && request.method === "POST") {
+      return handleFetchBatch(request);
+    }
+
     return handleFetch(request, env, ctx);
   },
 

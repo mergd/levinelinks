@@ -10,3 +10,8 @@ CREATE TABLE `subscribers` (
 CREATE UNIQUE INDEX `subscribers_email_unique` ON `subscribers` (`email`);
 
 
+
+
+
+
+
