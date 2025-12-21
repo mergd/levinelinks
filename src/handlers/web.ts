@@ -212,7 +212,7 @@ async function handleSubscribe(request: Request, env: Env): Promise<Response> {
 
   const resend = createResendClient(env.RESEND_API_KEY);
   await resend.emails.send({
-    from: "Levine Links <newsletter@levinelinks.com>",
+    from: `Levine Links <newsletter@${env.EMAIL_DOMAIN}>`,
     to: email,
     subject: "Verify your subscription",
     html: `

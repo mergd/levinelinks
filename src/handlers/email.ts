@@ -14,7 +14,8 @@ export async function handleEmail(
   ctx: ExecutionContext
 ): Promise<void> {
   const from = message.from.toLowerCase();
-  console.log(`📧 Received email from: ${from}`);
+  const to = message.to.toLowerCase();
+  console.log(`📧 Received email from: ${from} to: ${to}`);
 
   // Allow seed email to forward previous issues
   const isSeedEmail =

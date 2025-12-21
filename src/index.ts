@@ -16,7 +16,13 @@ export default {
   },
 
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext) {
-    await handleEmail(message, env, ctx);
+    console.log("📨 EMAIL EVENT RECEIVED");
+    try {
+      await handleEmail(message, env, ctx);
+    } catch (e) {
+      console.error("❌ EMAIL HANDLER ERROR:", e);
+      throw e;
+    }
   },
 };
 

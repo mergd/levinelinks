@@ -22,7 +22,7 @@ migrations_dir = "drizzle"
 binding = "NEWSLETTERS"
 id = "12fe9a29ec85487aa5d9eaeac7a8730c"
 
-# Email routing configured via API for yet-to-be.com
+# Email routing configured via dashboard for yet-to-be.com
 # Route: inbox@yet-to-be.com -> this worker
 
 # Service binding for parallel link fetching
