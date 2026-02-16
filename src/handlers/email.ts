@@ -7,31 +7,53 @@ import { stripForwardedHeaders } from "../services/parser";
 import type { Env } from "../types";
 
 const ALLOWED_SENDERS = ["noreply@news.bloomberg.com", "noreply@bloomberg.net"];
+const ALLOWED_SENDER_DOMAINS = [
+  "news.bloomberg.com",
+  "bounce.news.bloomberg.com",
+  "bloomberg.net",
+];
 
 export async function handleEmail(
   message: ForwardableEmailMessage,
   env: Env,
   ctx: ExecutionContext
 ): Promise<void> {
-  const from = message.from.toLowerCase();
+  const envelopeFrom = normalizeEmailAddress(message.from);
+  const headerFrom = normalizeEmailAddress(getHeader(message, "from"));
+  const replyTo = normalizeEmailAddress(getHeader(message, "reply-to"));
+  const returnPath = normalizeEmailAddress(getHeader(message, "return-path"));
   const to = message.to.toLowerCase();
-  console.log(`📧 Received email from: ${from} to: ${to}`);
+  const senderCandidates = [
+    envelopeFrom,
+    headerFrom,
+    replyTo,
+    returnPath,
+  ].filter(Boolean);
+
+  console.log(`📧 Received email to: ${to}`);
+  console.log(`   envelopeFrom=${envelopeFrom || "(none)"}`);
+  console.log(`   headerFrom=${headerFrom || "(none)"}`);
+  console.log(`   replyTo=${replyTo || "(none)"}`);
+  console.log(`   returnPath=${returnPath || "(none)"}`);
 
   // Allow seed email to forward previous issues
   const isSeedEmail =
-    env.SEED_EMAIL && from.includes(env.SEED_EMAIL.toLowerCase());
-  const isBloombergNewsletter = ALLOWED_SENDERS.some((allowed) =>
-    from.includes(allowed)
+    !!env.SEED_EMAIL &&
+    senderCandidates.some((sender) =>
+      sender.includes(env.SEED_EMAIL!.toLowerCase())
+    );
+  const isBloombergNewsletter = senderCandidates.some((sender) =>
+    isAllowedBloombergSender(sender)
   );
 
   if (isBloombergNewsletter) {
-    console.log(`Processing newsletter from: ${from}`);
+    console.log(`Processing newsletter from Bloomberg sender`);
     ctx.waitUntil(processNewsletter(message, env, true));
     return;
   }
 
   if (isSeedEmail) {
-    console.log(`Processing forwarded issue from seed: ${from}`);
+    console.log(`Processing forwarded issue from seed sender`);
     ctx.waitUntil(processNewsletter(message, env, false));
     return;
   }
@@ -43,7 +65,7 @@ export async function handleEmail(
     return;
   }
 
-  console.log(`Ignoring email from: ${from}`);
+  console.log(`Ignoring email from unrecognized sender`);
 }
 
 async function processNewsletter(
@@ -112,7 +134,7 @@ async function processNewsletter(
       );
 
       await resend.emails.send({
-        from: "Levine Links <newsletter@yet-to-be.com>",
+        from: `Levine Links <newsletter@${env.EMAIL_DOMAIN}>`,
         to: subscriber.email,
         subject,
         html: emailHtml,
@@ -164,7 +186,7 @@ async function forwardEmail(
   const resend = createResendClient(env.RESEND_API_KEY);
 
   await resend.emails.send({
-    from: "Levine Links <newsletter@yet-to-be.com>",
+    from: `Levine Links <newsletter@${env.EMAIL_DOMAIN}>`,
     to: env.SEED_EMAIL!,
     subject: `[FWD] ${parsed.subject || "No Subject"}`,
     html: parsed.html || parsed.text || "No content",
@@ -243,4 +265,30 @@ async function streamToString(stream: ReadableStream): Promise<string> {
   }
 
   return new TextDecoder().decode(result);
+}
+
+function getHeader(message: ForwardableEmailMessage, name: string): string {
+  return message.headers?.get(name) ?? "";
+}
+
+function normalizeEmailAddress(value: string): string {
+  const trimmed = value.toLowerCase().trim();
+  if (!trimmed) return "";
+
+  const bracketMatch = trimmed.match(/<([^>]+)>/);
+  if (bracketMatch?.[1]) {
+    return bracketMatch[1].trim();
+  }
+
+  return trimmed.replace(/^mailto:/, "").trim();
+}
+
+function isAllowedBloombergSender(sender: string): boolean {
+  if (!sender.includes("@")) return false;
+  if (ALLOWED_SENDERS.some((allowed) => sender.includes(allowed))) return true;
+
+  const domain = sender.split("@").pop() ?? "";
+  return ALLOWED_SENDER_DOMAINS.some((allowedDomain) =>
+    domain === allowedDomain || domain.endsWith(`.${allowedDomain}`)
+  );
 }

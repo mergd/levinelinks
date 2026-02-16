@@ -4,6 +4,7 @@ export interface Env {
   PERPLEXITY_API_KEY: string;
   RESEND_API_KEY: string;
   SITE_URL: string;
+  EMAIL_DOMAIN: string;
   SEED_EMAIL?: string;
   // Service binding for parallel link fetching (each fetch() call = new execution context)
   FETCHER: Fetcher;

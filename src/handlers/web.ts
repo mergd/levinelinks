@@ -3,6 +3,7 @@ import { formatDistanceToNow, differenceInDays } from "date-fns";
 import { getDb } from "../db";
 import { subscribers } from "../db/schema";
 import { createResendClient } from "../services/mailer";
+import { pruneExpiredUnverified } from "./maintenance";
 import type { Env } from "../types";
 
 export async function handleFetch(
@@ -113,6 +114,7 @@ async function handleHome(
   </header>
   <div class="sub">
     <p>Matt Levine's newsletter with AI summaries for paywalled articles.</p>
+    <p style="font-size:12px;color:#777;margin-top:-6px;margin-bottom:12px;text-align:center;">Every issue includes a one-click unsubscribe link.</p>
     <form action="/subscribe" method="POST">
       <input type="email" name="email" placeholder="your@email.com" required>
       <button>Subscribe</button>
@@ -191,6 +193,7 @@ async function handleSubscribe(request: Request, env: Env): Promise<Response> {
   }
 
   const db = getDb(env.DB);
+  await pruneExpiredUnverified(env);
 
   const existing = await db
     .select()
@@ -198,7 +201,20 @@ async function handleSubscribe(request: Request, env: Env): Promise<Response> {
     .where(eq(subscribers.email, email))
     .get();
   if (existing) {
-    return redirectWithMessage("Already subscribed!");
+    if (existing.verified) {
+      return redirectWithMessage(`${email} is already subscribed.`);
+    }
+
+    const verifyToken = existing.verifyToken || crypto.randomUUID();
+    if (!existing.verifyToken) {
+      await db
+        .update(subscribers)
+        .set({ verifyToken })
+        .where(eq(subscribers.id, existing.id));
+    }
+
+    await sendVerificationEmail(env, email, verifyToken);
+    return redirectWithMessage("You're almost subscribed. Check your email to verify.");
   }
 
   const verifyToken = crypto.randomUUID();
@@ -210,6 +226,16 @@ async function handleSubscribe(request: Request, env: Env): Promise<Response> {
     unsubscribeToken,
   });
 
+  await sendVerificationEmail(env, email, verifyToken);
+
+  return redirectWithMessage("Check your email to verify!");
+}
+
+async function sendVerificationEmail(
+  env: Env,
+  email: string,
+  verifyToken: string
+): Promise<void> {
   const resend = createResendClient(env.RESEND_API_KEY);
   await resend.emails.send({
     from: `Levine Links <newsletter@${env.EMAIL_DOMAIN}>`,
@@ -220,8 +246,6 @@ async function handleSubscribe(request: Request, env: Env): Promise<Response> {
       <p><a href="${env.SITE_URL}/verify?token=${verifyToken}">Verify Email</a></p>
     `,
   });
-
-  return redirectWithMessage("Check your email to verify!");
 }
 
 async function handleVerify(url: URL, env: Env): Promise<Response> {

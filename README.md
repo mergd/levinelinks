@@ -2,7 +2,7 @@
 
 Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled articles.
 
-**Live at [levine.fldr.zip](https://levine.fldr.zip)**
+**Live at [levine.yet-to-be.com](https://levine.yet-to-be.com)**
 
 ## What it does
 
@@ -40,6 +40,14 @@ cp .env.example .env
 # Edit .env with your API keys
 ```
 
+For deployed Workers, also set runtime secrets/vars:
+
+```bash
+wrangler secret put RESEND_API_KEY
+wrangler secret put PERPLEXITY_API_KEY
+wrangler secret put SEED_EMAIL
+```
+
 ### 3. Create Cloudflare resources
 
 ```bash
@@ -70,7 +78,7 @@ wrangler deploy
 In Cloudflare Dashboard:
 
 1. Go to **Email** → **Email Routing**
-2. Add your domain (e.g., `levine.fldr.zip`)
+2. Add your domain (e.g., `yet-to-be.com`)
 3. Create a **Catch-all** rule → Route to **Worker** → `levinelinks`
 
 ### 7. Configure Resend
@@ -84,7 +92,7 @@ In Cloudflare Dashboard:
 To backfill with previous newsletters:
 
 1. Set `SEED_EMAIL` in `.env` to your email
-2. Forward old Money Stuff emails to `inbox@levine.fldr.zip`
+2. Forward old Money Stuff emails to `inbox@yet-to-be.com`
 3. They'll be processed and stored without sending to subscribers
 
 ## Local development
@@ -111,6 +119,8 @@ bun run test-full       # Full end-to-end test
 | `RESEND_API_KEY`       | Resend API key for sending emails    |
 | `CLOUDFLARE_API_TOKEN` | CF API token (for wrangler)          |
 | `SEED_EMAIL`           | Your email for forwarding old issues |
+| `SITE_URL`             | Public site URL (set in `wrangler.toml`) |
+| `EMAIL_DOMAIN`         | Sender domain for Resend (set in `wrangler.toml`) |
 
 ## License
 

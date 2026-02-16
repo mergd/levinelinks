@@ -1,6 +1,7 @@
 import { handleEmail } from "./handlers/email";
 import { handleFetch } from "./handlers/web";
 import { handleFetchBatch } from "./handlers/fetcher";
+import { pruneExpiredUnverified } from "./handlers/maintenance";
 import type { Env } from "./types";
 
 export default {
@@ -24,5 +25,8 @@ export default {
       throw e;
     }
   },
-};
 
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(pruneExpiredUnverified(env));
+  },
+};
