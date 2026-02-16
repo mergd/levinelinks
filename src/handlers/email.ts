@@ -16,7 +16,7 @@ const ALLOWED_SENDER_DOMAINS = [
 export async function handleEmail(
   message: ForwardableEmailMessage,
   env: Env,
-  ctx: ExecutionContext
+  ctx: ExecutionContext,
 ): Promise<void> {
   const envelopeFrom = normalizeEmailAddress(message.from);
   const headerFrom = normalizeEmailAddress(getHeader(message, "from"));
@@ -40,10 +40,10 @@ export async function handleEmail(
   const isSeedEmail =
     !!env.SEED_EMAIL &&
     senderCandidates.some((sender) =>
-      sender.includes(env.SEED_EMAIL!.toLowerCase())
+      sender.includes(env.SEED_EMAIL!.toLowerCase()),
     );
   const isBloombergNewsletter = senderCandidates.some((sender) =>
-    isAllowedBloombergSender(sender)
+    isAllowedBloombergSender(sender),
   );
 
   if (isBloombergNewsletter) {
@@ -71,7 +71,7 @@ export async function handleEmail(
 async function processNewsletter(
   message: ForwardableEmailMessage,
   env: Env,
-  sendToSubscribers: boolean = true
+  sendToSubscribers: boolean = true,
 ): Promise<void> {
   try {
     const rawEmail = await streamToString(message.raw);
@@ -108,7 +108,7 @@ async function processNewsletter(
         preview: result.preview,
         ogImage: result.ogImage,
         processedAt: new Date().toISOString(),
-      })
+      }),
     );
 
     if (!sendToSubscribers) {
@@ -130,7 +130,7 @@ async function processNewsletter(
         result.html,
         env.SITE_URL,
         date,
-        unsubscribeUrl
+        unsubscribeUrl,
       );
 
       await resend.emails.send({
@@ -152,7 +152,7 @@ function addFooter(
   html: string,
   siteUrl: string,
   date: string,
-  unsubscribeUrl: string
+  unsubscribeUrl: string,
 ): string {
   const footer = `
     <div style="margin-top: 40px; padding: 24px; background: #f9f9f9; border-radius: 8px; font-family: -apple-system, sans-serif;">
@@ -177,7 +177,7 @@ function addFooter(
 
 async function forwardEmail(
   message: ForwardableEmailMessage,
-  env: Env
+  env: Env,
 ): Promise<void> {
   const rawEmail = await streamToString(message.raw);
   const parser = new PostalMime();
@@ -197,19 +197,19 @@ async function forwardEmail(
 
 function extractNewsletterDate(
   html: string,
-  fallbackDate?: Date | string
+  fallbackDate?: Date | string,
 ): string {
   // Gmail forward format: "Date: Tue, Nov 25, 2025 at 10:42 AM"
   const gmailMatch = html.match(
-    /Date:\s*(?:\w+,\s*)?(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})/i
+    /Date:\s*(?:\w+,\s*)?(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})/i,
   );
   if (gmailMatch) {
     const parsed = new Date(
-      `${gmailMatch[1]} ${gmailMatch[2]}, ${gmailMatch[3]}`
+      `${gmailMatch[1]} ${gmailMatch[2]}, ${gmailMatch[3]}`,
     );
     if (!isNaN(parsed.getTime())) {
       console.log(
-        `📅 Extracted date from Gmail forward: ${gmailMatch[1]} ${gmailMatch[2]}, ${gmailMatch[3]}`
+        `📅 Extracted date from Gmail forward: ${gmailMatch[1]} ${gmailMatch[2]}, ${gmailMatch[3]}`,
       );
       return parsed.toISOString().split("T")[0];
     }
@@ -217,11 +217,11 @@ function extractNewsletterDate(
 
   // Full month format: "Date: November 24, 2025"
   const fullMonthMatch = html.match(
-    /Date:\s*(?:\w+,\s*)?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i
+    /Date:\s*(?:\w+,\s*)?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i,
   );
   if (fullMonthMatch) {
     const parsed = new Date(
-      `${fullMonthMatch[1]} ${fullMonthMatch[2]}, ${fullMonthMatch[3]}`
+      `${fullMonthMatch[1]} ${fullMonthMatch[2]}, ${fullMonthMatch[3]}`,
     );
     if (!isNaN(parsed.getTime())) {
       console.log(`📅 Extracted date from header: ${fullMonthMatch[0]}`);
@@ -288,7 +288,8 @@ function isAllowedBloombergSender(sender: string): boolean {
   if (ALLOWED_SENDERS.some((allowed) => sender.includes(allowed))) return true;
 
   const domain = sender.split("@").pop() ?? "";
-  return ALLOWED_SENDER_DOMAINS.some((allowedDomain) =>
-    domain === allowedDomain || domain.endsWith(`.${allowedDomain}`)
+  return ALLOWED_SENDER_DOMAINS.some(
+    (allowedDomain) =>
+      domain === allowedDomain || domain.endsWith(`.${allowedDomain}`),
   );
 }
