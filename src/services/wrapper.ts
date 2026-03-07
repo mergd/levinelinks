@@ -45,6 +45,9 @@ const SKIP_URL_PATTERNS = [
   /bloomberg\.com\/.*\/newsletters\/\d{4}-\d{2}-\d{2}/,
 ];
 const SKIP_PATTERNS = [/^mailto:/, /^#/, /\.(jpg|jpeg|png|gif|webp|svg|pdf)$/i];
+const SKIP_LINK_TEXT_PATTERNS = [/^view in browser$/i, /^view enhanced version$/i];
+const FOOTER_START_PATTERN =
+  /If you'd like to get Money Stuff in handy email form/i;
 
 function shouldSkipUrl(url: string): boolean {
   if (SKIP_PATTERNS.some((p) => p.test(url))) return true;
@@ -180,12 +183,15 @@ export async function wrapNewsletter(
     text: string;
     fullMatch: string;
   }> = [];
+  const footerStartIndex = processedHtml.search(FOOTER_START_PATTERN);
 
   let match;
   while ((match = linkRegex.exec(processedHtml)) !== null) {
     const url = match[2];
     const text = match[3].replace(/<[^>]+>/g, "").trim();
     if (!url || shouldSkipUrl(url)) continue;
+    if (footerStartIndex !== -1 && match.index >= footerStartIndex) continue;
+    if (SKIP_LINK_TEXT_PATTERNS.some((pattern) => pattern.test(text))) continue;
 
     linksToProcess.push({
       match: match[0],
@@ -307,7 +313,9 @@ function processFootnotes(html: string): string {
       `<a\\s+href="#footnote-${num}"[^>]*>\\s*<span>\\[${num}\\]</span>\\s*</a>`,
       "gi"
     );
-    const replacement = `<sup><details style="display:inline-block;vertical-align:baseline;margin:0;padding:0;"><summary style="cursor:pointer;color:#1976d2;list-style:none;display:inline;font-size:11px;margin:0;padding:0;">[${num}]</summary><span style="font-size:12px;color:#555;background:#f5f5f5;padding:2px 6px;border-radius:3px;margin-left:2px;">${escapeHtml(content)}</span></details></sup>`;
+    const replacement = `<sup title="${escapeHtml(
+      normalizeInlineText(content)
+    )}" style="color:#666;font-size:11px;vertical-align:super;cursor:help;">[${num}]</sup>`;
     result = result.replace(refPattern, replacement);
   }
 
@@ -327,7 +335,7 @@ function generateEnrichedLink(
 
   const faviconHtml =
     data.favicon && hasText
-      ? `<img src="${data.favicon}" style="width:20px;height:20px;vertical-align:middle;margin-right:6px;border:0;" alt="">`
+      ? `<img src="${data.favicon}" style="width:20px;height:20px;vertical-align:middle;margin-right:6px;border:0;border-radius:50%;object-fit:cover;" alt="">`
       : "";
 
   let updatedLink = originalLinkHtml
@@ -346,25 +354,18 @@ function generateEnrichedLink(
   let result = updatedLink;
 
   if (data.summary && hasText) {
-    const fullText = data.summary.replace(/\s+/g, " ").trim();
-    const sentences = fullText.match(/[^.!?]+[.!?]+/g) || [fullText];
-    const previewText = sentences.slice(0, 2).join(" ").trim();
-    const hasMore = sentences.length > 2;
-    const restText = sentences.slice(2).join(" ").trim();
+    const summaryHtml = renderInlineRichText(data.summary);
 
     const archiveLink = data.archiveUrl
       ? `<a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;vertical-align:middle;margin-right:4px;" title="Read archived (no paywall)">📰</a>`
       : "";
 
-    result += `${archiveLink}<details style="display:inline-block;vertical-align:baseline;margin:0;padding:0;"><summary style="cursor:pointer;list-style:none;display:inline;margin:0;padding:0;">💡</summary><span style="font-size:13px;color:#444;margin-left:4px;">${escapeHtml(previewText)}`;
-    if (hasMore) {
-      result += ` <details style="display:inline;margin:0;padding:0;"><summary style="cursor:pointer;color:#1976d2;font-size:11px;list-style:none;display:inline;margin:0;padding:0;">[more]</summary><span>${escapeHtml(restText)}</span></details>`;
-    }
+    result += `${archiveLink}<span style="font-size:13px;color:#555;margin-left:4px;">💡 ${summaryHtml}`;
     result += ` <a href="${data.resolvedUrl}" target="_blank" rel="noopener" style="color:#1976d2;font-size:11px;text-decoration:none;">[read]</a>`;
     if (data.archiveUrl) {
       result += ` <a href="${data.archiveUrl}" target="_blank" rel="noopener" style="color:#2e7d32;font-size:11px;text-decoration:none;">[archive]</a>`;
     }
-    result += `</span></details>`;
+    result += `</span>`;
   } else if (data.archiveUrl && hasText) {
     result += ` <a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;" title="Read archived (no paywall)">📰</a>`;
   }
@@ -378,4 +379,47 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function normalizeInlineText(text: string): string {
+  return text
+    .replace(/\[web:\d+\]/gi, "")
+    .replace(/\[\d+\]/g, "")
+    .replace(/\[more\]/gi, "")
+    .replace(/^\s*[-*]\s+/gm, "")
+    .replace(/^\s*\d+\.\s+/gm, "")
+    .replace(/\s*\n+\s*/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function renderInlineRichText(text: string): string {
+  const linkTokens: string[] = [];
+  let normalized = normalizeInlineText(text).replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label: string, url: string) => {
+      const token = `@@LINK_${linkTokens.length}@@`;
+      linkTokens.push(
+        `<a href="${escapeHtml(
+          url
+        )}" target="_blank" rel="noopener" style="color:#1976d2;text-decoration:none;">${escapeHtml(
+          label
+        )}</a>`
+      );
+      return token;
+    }
+  );
+
+  let html = escapeHtml(normalized)
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, '<code style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.95em;">$1</code>')
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+    .replace(/_([^_\n]+)_/g, "<em>$1</em>");
+
+  for (const [index, tokenHtml] of linkTokens.entries()) {
+    html = html.replace(`@@LINK_${index}@@`, tokenHtml);
+  }
+
+  return html;
 }

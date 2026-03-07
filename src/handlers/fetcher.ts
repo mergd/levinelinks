@@ -1,14 +1,20 @@
 import type {
+  Env,
   FetchBatchRequest,
   FetchBatchResponse,
   LinkFetchResult,
 } from "../types";
+import { LEVINE_AVATAR_DATA_URI } from "../assets/levine-avatar";
 
 const TRACKING_DOMAINS = [
   "links.message.bloomberg.com",
   "bloom.bg",
   "sli.bloomberg.com",
 ];
+
+const BLOOMBERG_NEWSLETTER_PREFIX = "/opinion/newsletters/";
+const LINK_CACHE_PREFIX = "cache:link:v1:";
+const LINK_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
 
 const PAYWALLED_DOMAINS = [
   "wsj.com",
@@ -27,10 +33,21 @@ const PAYWALLED_DOMAINS = [
   "stratechery.com",
 ];
 
-export async function handleFetchBatch(request: Request): Promise<Response> {
+interface CachedLinkResult {
+  resolvedUrl: string;
+  favicon?: string;
+  summary?: string;
+  archiveUrl?: string;
+  ogImage?: string;
+}
+
+export async function handleFetchBatch(
+  request: Request,
+  env: Env
+): Promise<Response> {
   try {
     const body = (await request.json()) as FetchBatchRequest;
-    const results = await processBatch(body);
+    const results = await processBatch(body, env);
     return Response.json(results);
   } catch (e) {
     console.error("Fetcher error:", e);
@@ -39,11 +56,18 @@ export async function handleFetchBatch(request: Request): Promise<Response> {
 }
 
 async function processBatch(
-  batch: FetchBatchRequest
+  batch: FetchBatchRequest,
+  env: Env
 ): Promise<FetchBatchResponse> {
   const results: LinkFetchResult[] = [];
 
   for (const item of batch.items) {
+    const cachedByOriginal = await getCachedLinkResult(env, item.url);
+    if (cachedByOriginal && (!item.fetchOgImage || cachedByOriginal.ogImage)) {
+      results.push(buildResultFromCache(item.url, cachedByOriginal));
+      continue;
+    }
+
     const result: LinkFetchResult = {
       originalUrl: item.url,
       resolvedUrl: item.url,
@@ -52,6 +76,16 @@ async function processBatch(
     try {
       // Step 1: Resolve tracking URL
       result.resolvedUrl = await resolveTrackingUrl(item.url);
+
+      if (result.resolvedUrl !== item.url) {
+        const cachedByResolved = await getCachedLinkResult(env, result.resolvedUrl);
+        if (cachedByResolved && (!item.fetchOgImage || cachedByResolved.ogImage)) {
+          await cacheLinkResult(env, item.url, cachedByResolved);
+          results.push(buildResultFromCache(item.url, cachedByResolved));
+          continue;
+        }
+      }
+
       result.favicon = getFaviconUrl(result.resolvedUrl);
 
       // Step 2: For paywalled URLs, fetch summary + archive in parallel
@@ -69,6 +103,8 @@ async function processBatch(
       if (item.fetchOgImage) {
         result.ogImage = await fetchOgImage(result.resolvedUrl);
       }
+
+      await cacheResultAliases(env, result);
     } catch (e) {
       console.error(`Error processing ${item.url}:`, e);
     }
@@ -113,11 +149,87 @@ function isPaywalledUrl(url: string): boolean {
 
 function getFaviconUrl(url: string): string {
   try {
-    const domain = new URL(url).hostname;
+    const parsed = new URL(url);
+    if (
+      parsed.hostname === "www.bloomberg.com" &&
+      parsed.pathname.startsWith(BLOOMBERG_NEWSLETTER_PREFIX)
+    ) {
+      return LEVINE_AVATAR_DATA_URI;
+    }
+    const domain = parsed.hostname;
     return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
   } catch {
     return "";
   }
+}
+
+function buildResultFromCache(
+  originalUrl: string,
+  cached: CachedLinkResult
+): LinkFetchResult {
+  return {
+    originalUrl,
+    resolvedUrl: cached.resolvedUrl,
+    favicon: cached.favicon,
+    summary: cached.summary,
+    archiveUrl: cached.archiveUrl,
+    ogImage: cached.ogImage,
+  };
+}
+
+async function getCachedLinkResult(
+  env: Env,
+  url: string
+): Promise<CachedLinkResult | null> {
+  try {
+    const cacheKey = await getLinkCacheKey(url);
+    const cached = await env.NEWSLETTERS.get(cacheKey, "json");
+    return (cached as CachedLinkResult | null) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function cacheResultAliases(env: Env, result: LinkFetchResult): Promise<void> {
+  const cached: CachedLinkResult = {
+    resolvedUrl: result.resolvedUrl,
+    favicon: result.favicon,
+    summary: result.summary,
+    archiveUrl: result.archiveUrl,
+    ogImage: result.ogImage,
+  };
+
+  await Promise.all([
+    cacheLinkResult(env, result.originalUrl, cached),
+    result.resolvedUrl !== result.originalUrl
+      ? cacheLinkResult(env, result.resolvedUrl, cached)
+      : Promise.resolve(),
+  ]);
+}
+
+async function cacheLinkResult(
+  env: Env,
+  url: string,
+  cached: CachedLinkResult
+): Promise<void> {
+  try {
+    const cacheKey = await getLinkCacheKey(url);
+    await env.NEWSLETTERS.put(cacheKey, JSON.stringify(cached), {
+      expirationTtl: LINK_CACHE_TTL_SECONDS,
+    });
+  } catch {
+    // Cache failures should never block newsletter processing.
+  }
+}
+
+async function getLinkCacheKey(url: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(url)
+  );
+  const bytes = Array.from(new Uint8Array(digest));
+  const hex = bytes.map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${LINK_CACHE_PREFIX}${hex}`;
 }
 
 async function getPerplexitySummary(

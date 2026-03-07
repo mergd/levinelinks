@@ -10,7 +10,7 @@ export default {
 
     // Internal fetcher endpoint (called via service bindings)
     if (url.pathname === "/_fetch-batch" && request.method === "POST") {
-      return handleFetchBatch(request);
+      return handleFetchBatch(request, env);
     }
 
     return handleFetch(request, env, ctx);
