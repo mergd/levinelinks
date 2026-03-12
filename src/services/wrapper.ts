@@ -26,7 +26,6 @@ const SKIP_DOMAINS = [
   "bloomberg.com/tos",
   "bloombergmedia.com",
   "unsubscribe",
-  "bloom.bg",
   "mail.bloombergbusiness.com",
   "link.mail.bloombergbusiness.com",
   "liveintent.com",
@@ -46,8 +45,11 @@ const SKIP_URL_PATTERNS = [
 ];
 const SKIP_PATTERNS = [/^mailto:/, /^#/, /\.(jpg|jpeg|png|gif|webp|svg|pdf)$/i];
 const SKIP_LINK_TEXT_PATTERNS = [/^view in browser$/i, /^view enhanced version$/i];
-const FOOTER_START_PATTERN =
-  /If you'd like to get Money Stuff in handy email form/i;
+const FOOTER_START_PATTERNS = [
+  /If you(?:'|'|&#x27;|&#39;|&rsquo;|â€™)?d like to get Money Stuff in handy email form/i,
+  /If you(?:'|'|&#x27;|&#39;|&rsquo;|â€™)?d like to get Money Stuff/i,
+  /Want Money Stuff in handy email form/i,
+];
 
 function shouldSkipUrl(url: string): boolean {
   if (SKIP_PATTERNS.some((p) => p.test(url))) return true;
@@ -183,7 +185,11 @@ export async function wrapNewsletter(
     text: string;
     fullMatch: string;
   }> = [];
-  const footerStartIndex = processedHtml.search(FOOTER_START_PATTERN);
+  let footerStartIndex = -1;
+  for (const pattern of FOOTER_START_PATTERNS) {
+    footerStartIndex = processedHtml.search(pattern);
+    if (footerStartIndex !== -1) break;
+  }
 
   let match;
   while ((match = linkRegex.exec(processedHtml)) !== null) {

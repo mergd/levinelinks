@@ -12,7 +12,7 @@ const TRACKING_DOMAINS = [
   "sli.bloomberg.com",
 ];
 
-const BLOOMBERG_NEWSLETTER_PREFIX = "/opinion/newsletters/";
+const BLOOMBERG_NEWSLETTER_PATTERN = /bloomberg\.com\/opinion\/newsletters\//i;
 const LINK_CACHE_PREFIX = "cache:link:v1:";
 const LINK_CACHE_TTL_SECONDS = 60 * 60 * 24 * 30;
 
@@ -88,11 +88,12 @@ async function processBatch(
 
       result.favicon = getFaviconUrl(result.resolvedUrl);
 
-      // Step 2: For paywalled URLs, fetch summary + archive in parallel
+      const isNewsletter = isBloombergNewsletterUrl(result.resolvedUrl);
       const isPaywalled = isPaywalledUrl(result.resolvedUrl);
-      if (isPaywalled && batch.perplexityApiKey) {
+
+      if (isPaywalled && !isNewsletter && batch.perplexityApiKey) {
         const [summary, archiveUrl] = await Promise.all([
-          getPerplexitySummary(result.resolvedUrl, batch.perplexityApiKey),
+          getPerplexitySummary(result.resolvedUrl, batch.perplexityApiKey, item.text),
           getArchiveUrl(result.resolvedUrl),
         ]);
         result.summary = summary;
@@ -121,7 +122,7 @@ async function resolveTrackingUrl(url: string, depth = 0): Promise<string> {
   try {
     const hostname = new URL(url).hostname.toLowerCase();
     const isTracking = TRACKING_DOMAINS.some((d) => hostname.includes(d));
-    if (!isTracking) return url;
+    if (!isTracking && depth === 0) return url;
 
     const response = await fetch(url, { method: "HEAD", redirect: "manual" });
     const location = response.headers.get("location");
@@ -132,6 +133,18 @@ async function resolveTrackingUrl(url: string, depth = 0): Promise<string> {
         : location;
       return resolveTrackingUrl(resolved, depth + 1);
     }
+
+    if (isTracking && !location) {
+      const getResponse = await fetch(url, { redirect: "manual" });
+      const getLocation = getResponse.headers.get("location");
+      if (getLocation) {
+        const resolved = getLocation.startsWith("/")
+          ? new URL(getLocation, url).href
+          : getLocation;
+        return resolveTrackingUrl(resolved, depth + 1);
+      }
+    }
+
     return url;
   } catch {
     return url;
@@ -147,13 +160,14 @@ function isPaywalledUrl(url: string): boolean {
   }
 }
 
+function isBloombergNewsletterUrl(url: string): boolean {
+  return BLOOMBERG_NEWSLETTER_PATTERN.test(url);
+}
+
 function getFaviconUrl(url: string): string {
   try {
     const parsed = new URL(url);
-    if (
-      parsed.hostname === "www.bloomberg.com" &&
-      parsed.pathname.startsWith(BLOOMBERG_NEWSLETTER_PREFIX)
-    ) {
+    if (isBloombergNewsletterUrl(url)) {
       return LEVINE_AVATAR_DATA_URI;
     }
     const domain = parsed.hostname;
@@ -234,9 +248,14 @@ async function getLinkCacheKey(url: string): Promise<string> {
 
 async function getPerplexitySummary(
   url: string,
-  apiKey: string
+  apiKey: string,
+  articleTitle?: string
 ): Promise<string | undefined> {
   try {
+    const userPrompt = articleTitle && articleTitle.length >= 10
+      ? `Search for and summarize this news article titled "${articleTitle}" (URL: ${url}). Use the title to find the actual article content if the URL is paywalled.`
+      : `Search for and summarize the news article at this URL: ${url}`;
+
     const response = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
       headers: {
@@ -253,7 +272,7 @@ async function getPerplexitySummary(
           },
           {
             role: "user",
-            content: `Search for and summarize the news article at this URL: ${url}`,
+            content: userPrompt,
           },
         ],
         max_tokens: 250,
