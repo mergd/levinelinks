@@ -360,7 +360,8 @@ function generateEnrichedLink(
       ? `<a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;vertical-align:middle;margin-right:4px;" title="Read archived (no paywall)">📰</a>`
       : "";
 
-    result += `${archiveLink}<span style="font-size:13px;color:#555;margin-left:4px;">💡 ${summaryHtml}`;
+    result += `${archiveLink}<span onclick="var s=this.nextElementSibling;s.style.display=s.style.display==='inline'?'none':'inline'" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">💡</span>`;
+    result += `<span style="display:none;font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
     result += ` <a href="${data.resolvedUrl}" target="_blank" rel="noopener" style="color:#1976d2;font-size:11px;text-decoration:none;">[read]</a>`;
     if (data.archiveUrl) {
       result += ` <a href="${data.archiveUrl}" target="_blank" rel="noopener" style="color:#2e7d32;font-size:11px;text-decoration:none;">[archive]</a>`;
