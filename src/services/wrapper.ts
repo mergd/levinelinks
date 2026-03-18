@@ -44,11 +44,18 @@ const SKIP_URL_PATTERNS = [
   /bloomberg\.com\/.*\/newsletters\/\d{4}-\d{2}-\d{2}/,
 ];
 const SKIP_PATTERNS = [/^mailto:/, /^#/, /\.(jpg|jpeg|png|gif|webp|svg|pdf)$/i];
-const SKIP_LINK_TEXT_PATTERNS = [/^view in browser$/i, /^view enhanced version$/i];
+const SKIP_LINK_TEXT_PATTERNS = [
+  /^view in browser$/i,
+  /^view enhanced version$/i,
+  /^get the newsletter$/i,
+  /^subscribe to bloomberg\.com$/i,
+];
 const FOOTER_START_PATTERNS = [
-  /If you(?:'|'|&#x27;|&#39;|&rsquo;|â€™)?d like to get Money Stuff in handy email form/i,
-  /If you(?:'|'|&#x27;|&#39;|&rsquo;|â€™)?d like to get Money Stuff/i,
-  /Want Money Stuff in handy email form/i,
+  />\s*If you(?:'|'|&#x27;|&#39;|&rsquo;)?d like to get Money Stuff in handy email form/i,
+  />\s*Follow Us\s*</i,
+  />\s*Get the newsletter\s*</i,
+  /Like getting this newsletter\?/i,
+  /You received this message because you are subscribed to Bloomberg(?:'|&#x27;|&#39;|&rsquo;)?s Money Stuff newsletter/i,
 ];
 
 function shouldSkipUrl(url: string): boolean {
@@ -185,11 +192,7 @@ export async function wrapNewsletter(
     text: string;
     fullMatch: string;
   }> = [];
-  let footerStartIndex = -1;
-  for (const pattern of FOOTER_START_PATTERNS) {
-    footerStartIndex = processedHtml.search(pattern);
-    if (footerStartIndex !== -1) break;
-  }
+  const footerStartIndex = findFooterStartIndex(processedHtml);
 
   let match;
   while ((match = linkRegex.exec(processedHtml)) !== null) {
@@ -366,8 +369,8 @@ function generateEnrichedLink(
       ? `<a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;vertical-align:middle;margin-right:4px;" title="Read archived (no paywall)">📰</a>`
       : "";
 
-    result += `${archiveLink}<span onclick="var s=this.nextElementSibling;s.style.display=s.style.display==='inline'?'none':'inline'" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">💡</span>`;
-    result += `<span style="display:none;font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
+    result += `${archiveLink}<span role="button" tabindex="0" onclick="event.preventDefault();event.stopPropagation();var s=this.nextElementSibling;var open=s.hasAttribute('hidden');if(open){s.removeAttribute('hidden');this.textContent='▾';this.title='Hide AI summary';}else{s.setAttribute('hidden','');this.textContent='▸';this.title='Show AI summary';}return false;" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">▸</span>`;
+    result += `<span hidden style="font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
     result += ` <a href="${data.resolvedUrl}" target="_blank" rel="noopener" style="color:#1976d2;font-size:11px;text-decoration:none;">[read]</a>`;
     if (data.archiveUrl) {
       result += ` <a href="${data.archiveUrl}" target="_blank" rel="noopener" style="color:#2e7d32;font-size:11px;text-decoration:none;">[archive]</a>`;
@@ -386,6 +389,20 @@ function escapeHtml(text: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function findFooterStartIndex(html: string): number {
+  let earliestIndex = -1;
+
+  for (const pattern of FOOTER_START_PATTERNS) {
+    const index = html.search(pattern);
+    if (index === -1) continue;
+    if (earliestIndex === -1 || index < earliestIndex) {
+      earliestIndex = index;
+    }
+  }
+
+  return earliestIndex;
 }
 
 function normalizeInlineText(text: string): string {
