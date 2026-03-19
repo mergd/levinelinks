@@ -369,7 +369,7 @@ function generateEnrichedLink(
       ? `<a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;vertical-align:middle;margin-right:4px;" title="Read archived (no paywall)">📰</a>`
       : "";
 
-    result += `${archiveLink}<span role="button" tabindex="0" onclick="event.preventDefault();event.stopPropagation();var s=this.nextElementSibling;var open=s.hasAttribute('hidden');if(open){s.removeAttribute('hidden');this.textContent='▾';this.title='Hide AI summary';}else{s.setAttribute('hidden','');this.textContent='▸';this.title='Show AI summary';}return false;" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">▸</span>`;
+    result += `${archiveLink}<span role="button" tabindex="0" onclick="var s=this.nextElementSibling;s.hidden=!s.hidden;this.textContent=s.hidden?'▸':'▾';this.title=s.hidden?'Show AI summary':'Hide AI summary';" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">▸</span>`;
     result += `<span hidden style="font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
     result += ` <a href="${data.resolvedUrl}" target="_blank" rel="noopener" style="color:#1976d2;font-size:11px;text-decoration:none;">[read]</a>`;
     if (data.archiveUrl) {

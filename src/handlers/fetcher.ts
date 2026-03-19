@@ -63,7 +63,11 @@ async function processBatch(
 
   for (const item of batch.items) {
     const cachedByOriginal = await getCachedLinkResult(env, item.url);
-    if (cachedByOriginal && (!item.fetchOgImage || cachedByOriginal.ogImage)) {
+    if (
+      cachedByOriginal &&
+      !isTrackingUrl(cachedByOriginal.resolvedUrl) &&
+      (!item.fetchOgImage || cachedByOriginal.ogImage)
+    ) {
       results.push(buildResultFromCache(item.url, cachedByOriginal));
       continue;
     }
@@ -77,9 +81,16 @@ async function processBatch(
       // Step 1: Resolve tracking URL
       result.resolvedUrl = await resolveTrackingUrl(item.url);
 
-      if (result.resolvedUrl !== item.url) {
+      if (
+        result.resolvedUrl !== item.url &&
+        !isTrackingUrl(result.resolvedUrl)
+      ) {
         const cachedByResolved = await getCachedLinkResult(env, result.resolvedUrl);
-        if (cachedByResolved && (!item.fetchOgImage || cachedByResolved.ogImage)) {
+        if (
+          cachedByResolved &&
+          !isTrackingUrl(cachedByResolved.resolvedUrl) &&
+          (!item.fetchOgImage || cachedByResolved.ogImage)
+        ) {
           await cacheLinkResult(env, item.url, cachedByResolved);
           results.push(buildResultFromCache(item.url, cachedByResolved));
           continue;
@@ -120,28 +131,48 @@ async function resolveTrackingUrl(url: string, depth = 0): Promise<string> {
   if (depth > 5) return url;
 
   try {
-    const hostname = new URL(url).hostname.toLowerCase();
-    const isTracking = TRACKING_DOMAINS.some((d) => hostname.includes(d));
+    const isTracking = isTrackingUrl(url);
     if (!isTracking && depth === 0) return url;
 
-    const response = await fetch(url, { method: "HEAD", redirect: "manual" });
+    const response = await fetch(url, {
+      method: "HEAD",
+      redirect: "manual",
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+      },
+    });
     const location = response.headers.get("location");
 
     if (location) {
-      const resolved = location.startsWith("/")
-        ? new URL(location, url).href
-        : location;
+      const resolved = absolutizeUrl(location, url);
       return resolveTrackingUrl(resolved, depth + 1);
     }
 
     if (isTracking && !location) {
-      const getResponse = await fetch(url, { redirect: "manual" });
+      const directTarget = extractDirectTarget(url);
+      if (directTarget) {
+        return resolveTrackingUrl(directTarget, depth + 1);
+      }
+
+      const getResponse = await fetch(url, {
+        redirect: "manual",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          Accept: "text/html,application/xhtml+xml",
+        },
+      });
       const getLocation = getResponse.headers.get("location");
       if (getLocation) {
-        const resolved = getLocation.startsWith("/")
-          ? new URL(getLocation, url).href
-          : getLocation;
+        const resolved = absolutizeUrl(getLocation, url);
         return resolveTrackingUrl(resolved, depth + 1);
+      }
+
+      const body = await getResponse.text();
+      const extractedTarget = extractUrlFromHtml(body, url);
+      if (extractedTarget) {
+        return resolveTrackingUrl(extractedTarget, depth + 1);
       }
     }
 
@@ -160,8 +191,60 @@ function isPaywalledUrl(url: string): boolean {
   }
 }
 
+function isTrackingUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    return TRACKING_DOMAINS.some((d) => hostname.includes(d));
+  } catch {
+    return false;
+  }
+}
+
 function isBloombergNewsletterUrl(url: string): boolean {
   return BLOOMBERG_NEWSLETTER_PATTERN.test(url);
+}
+
+function absolutizeUrl(url: string, baseUrl: string): string {
+  return url.startsWith("/") ? new URL(url, baseUrl).href : url;
+}
+
+function extractDirectTarget(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const candidates = ["url", "u", "target", "dest", "destination", "redirect"];
+
+    for (const key of candidates) {
+      const value = parsed.searchParams.get(key);
+      if (value?.startsWith("http://") || value?.startsWith("https://")) {
+        return value;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+function extractUrlFromHtml(html: string, baseUrl: string): string | undefined {
+  const metaRefreshMatch = html.match(
+    /<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"';>]+)["']/i
+  );
+  if (metaRefreshMatch?.[1]) {
+    return absolutizeUrl(metaRefreshMatch[1], baseUrl);
+  }
+
+  const canonicalMatch =
+    html.match(/<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/i);
+  if (canonicalMatch?.[1]) {
+    return absolutizeUrl(canonicalMatch[1], baseUrl);
+  }
+
+  const locationMatch = html.match(
+    /(?:window\.location(?:\.href)?|location\.replace)\s*=\s*["']([^"']+)["']/i
+  );
+  if (locationMatch?.[1]) {
+    return absolutizeUrl(locationMatch[1], baseUrl);
+  }
 }
 
 function getFaviconUrl(url: string): string {
@@ -252,9 +335,7 @@ async function getPerplexitySummary(
   articleTitle?: string
 ): Promise<string | undefined> {
   try {
-    const userPrompt = articleTitle && articleTitle.length >= 10
-      ? `Search for and summarize this news article titled "${articleTitle}" (URL: ${url}). Use the title to find the actual article content if the URL is paywalled.`
-      : `Search for and summarize the news article at this URL: ${url}`;
+    const userPrompt = buildSummaryPrompt(url, articleTitle);
 
     const response = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
@@ -317,6 +398,57 @@ async function getPerplexitySummary(
       .replace(/\s+/g, " ")
       .trim()
       .replace(/^./, (c) => c.toUpperCase());
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSummaryPrompt(url: string, articleTitle?: string): string {
+  const safeTitle = articleTitle?.trim();
+  const slugHint = getArticleSlugHint(url);
+
+  if (isBloombergArticleUrl(url)) {
+    if (safeTitle && safeTitle.length >= 10) {
+      return `Search for and summarize the Bloomberg article titled "${safeTitle}" (URL: ${url}). Bloomberg article pages may return a robot check, so do not rely on directly opening the page. Use the title${slugHint ? ` and URL slug "${slugHint}"` : ""} to identify the correct article and summarize it.`;
+    }
+
+    if (slugHint) {
+      return `Search for and summarize the Bloomberg article matching this URL: ${url}. Bloomberg article pages may return a robot check, so use the URL slug "${slugHint}" to identify the correct article and summarize it.`;
+    }
+  }
+
+  if (safeTitle && safeTitle.length >= 10) {
+    return `Search for and summarize this news article titled "${safeTitle}" (URL: ${url}). Use the title to find the actual article content if the URL is paywalled.`;
+  }
+
+  return `Search for and summarize the news article at this URL: ${url}`;
+}
+
+function isBloombergArticleUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname.includes("bloomberg.com") &&
+      /\/(news|opinion|features|graphics|businessweek|quote|live)\//.test(
+        parsed.pathname
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getArticleSlugHint(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const slug = segments.at(-1);
+    if (!slug) return undefined;
+
+    return slug
+      .replace(/[-_]+/g, " ")
+      .replace(/\.(html?)$/i, "")
+      .trim();
   } catch {
     return undefined;
   }
