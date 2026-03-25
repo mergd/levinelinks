@@ -15,6 +15,9 @@ export const newsletters = sqliteTable("newsletters", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   date: text("date").notNull().unique(), // YYYY-MM-DD
   subject: text("subject").notNull(),
+  html: text("html"),
+  preview: text("preview"),
+  ogImage: text("og_image"),
   linkCount: integer("link_count").default(0),
   summaryCount: integer("summary_count").default(0),
   archiveCount: integer("archive_count").default(0),

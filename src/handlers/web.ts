@@ -1,7 +1,7 @@
-import { eq } from "drizzle-orm";
+import { asc, desc, eq, gt, lt } from "drizzle-orm";
 import { formatDistanceToNow, differenceInDays } from "date-fns";
 import { getDb } from "../db";
-import { subscribers } from "../db/schema";
+import { newsletters, subscribers } from "../db/schema";
 import { createResendClient } from "../services/mailer";
 import { pruneExpiredUnverified } from "./maintenance";
 import type { Env } from "../types";
@@ -174,31 +174,24 @@ interface IssueNavigation {
 }
 
 async function getAllIssues(env: Env): Promise<Issue[]> {
-  const issues: Issue[] = [];
-  let cursor: string | undefined;
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({
+      date: newsletters.date,
+      subject: newsletters.subject,
+      preview: newsletters.preview,
+      ogImage: newsletters.ogImage,
+    })
+    .from(newsletters)
+    .orderBy(desc(newsletters.date))
+    .all();
 
-  do {
-    const list = await env.NEWSLETTERS.list({ cursor });
-    cursor = list.list_complete ? undefined : list.cursor;
-
-    for (const key of list.keys) {
-      if (!key.name.endsWith(".json")) continue;
-      const data = await env.NEWSLETTERS.get(key.name);
-      if (!data) continue;
-
-      try {
-        const parsed = JSON.parse(data);
-        issues.push({
-          date: parsed.date,
-          subject: parsed.subject,
-          preview: parsed.preview,
-          ogImage: parsed.ogImage,
-        });
-      } catch {}
-    }
-  } while (cursor);
-
-  return issues.sort((a, b) => b.date.localeCompare(a.date));
+  return rows.map((row) => ({
+    date: row.date,
+    subject: row.subject,
+    preview: row.preview ?? undefined,
+    ogImage: row.ogImage ?? undefined,
+  }));
 }
 
 function formatDate(dateStr: string, relative: boolean = false): string {
@@ -331,16 +324,51 @@ async function getIssueNavigation(
   env: Env,
   date: string
 ): Promise<IssueNavigation> {
-  const issues = await getAllIssues(env);
-  const index = issues.findIndex((issue) => issue.date === date);
-
-  if (index === -1) {
-    return {};
-  }
+  const db = getDb(env.DB);
+  const [newerRow, olderRow] = await Promise.all([
+    db
+      .select({
+        date: newsletters.date,
+        subject: newsletters.subject,
+        preview: newsletters.preview,
+        ogImage: newsletters.ogImage,
+      })
+      .from(newsletters)
+      .where(gt(newsletters.date, date))
+      .orderBy(asc(newsletters.date))
+      .limit(1)
+      .get(),
+    db
+      .select({
+        date: newsletters.date,
+        subject: newsletters.subject,
+        preview: newsletters.preview,
+        ogImage: newsletters.ogImage,
+      })
+      .from(newsletters)
+      .where(lt(newsletters.date, date))
+      .orderBy(desc(newsletters.date))
+      .limit(1)
+      .get(),
+  ]);
 
   return {
-    newer: index > 0 ? issues[index - 1] : undefined,
-    older: index < issues.length - 1 ? issues[index + 1] : undefined,
+    newer: newerRow
+      ? {
+          date: newerRow.date,
+          subject: newerRow.subject,
+          preview: newerRow.preview ?? undefined,
+          ogImage: newerRow.ogImage ?? undefined,
+        }
+      : undefined,
+    older: olderRow
+      ? {
+          date: olderRow.date,
+          subject: olderRow.subject,
+          preview: olderRow.preview ?? undefined,
+          ogImage: olderRow.ogImage ?? undefined,
+        }
+      : undefined,
   };
 }
 
@@ -453,30 +481,37 @@ async function handleUnsubscribe(url: URL, env: Env): Promise<Response> {
 }
 
 async function handleNewsletter(date: string, env: Env): Promise<Response> {
-  const html = await env.NEWSLETTERS.get(`${date}.html`);
-  const metaJson = await env.NEWSLETTERS.get(`${date}.json`);
+  const db = getDb(env.DB);
+  const meta = await db
+    .select({
+      subject: newsletters.subject,
+      html: newsletters.html,
+      preview: newsletters.preview,
+      ogImage: newsletters.ogImage,
+    })
+    .from(newsletters)
+    .where(eq(newsletters.date, date))
+    .get();
+  const html = meta?.html ?? null;
 
   if (!html) {
     return new Response("Newsletter not found", { status: 404 });
   }
 
-  let subject = "Money Stuff";
-  if (metaJson) {
-    try {
-      const meta = JSON.parse(metaJson);
-      subject = meta.subject || subject;
-    } catch {}
-  }
+  const subject = meta?.subject || "Money Stuff";
 
   const textContent = html
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const preview = textContent.slice(0, 180).trim() + "...";
+  const preview = meta?.preview || textContent.slice(0, 180).trim() + "...";
   const cleanSubject = subject
     .replace(/^(Money Stuff:\s*|Fwd:\s*)/gi, "")
     .trim();
   const nav = await getIssueNavigation(env, date);
+  const ogImage =
+    meta?.ogImage ||
+    "https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iELnhicC0ZBk/v0/-1x-1.jpg";
 
   const headContent = `
     <meta charset="utf-8">
@@ -486,12 +521,12 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     <meta property="og:description" content="${escapeHtml(preview)}">
     <meta property="og:type" content="article">
     <meta property="og:url" content="${env.SITE_URL}/newsletter/${date}">
-    <meta property="og:image" content="https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iELnhicC0ZBk/v0/-1x-1.jpg">
+    <meta property="og:image" content="${escapeHtml(ogImage)}">
     <meta property="og:site_name" content="Levine Links">
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="${escapeHtml(cleanSubject)}">
     <meta name="twitter:description" content="${escapeHtml(preview)}">
-    <meta name="twitter:image" content="https://assets.bwbx.io/images/users/iqjWHBFdfxIU/iELnhicC0ZBk/v0/-1x-1.jpg">
+    <meta name="twitter:image" content="${escapeHtml(ogImage)}">
     <title>${escapeHtml(cleanSubject)} - Levine Links</title>
     <style>
       :root { color-scheme: light only; }

@@ -17,8 +17,7 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled a
 ## Stack
 
 - **Cloudflare Workers** - Edge compute
-- **Cloudflare D1** - SQLite database (subscribers)
-- **Cloudflare KV** - Newsletter HTML storage
+- **Cloudflare D1** - SQLite database (subscribers + newsletter archive)
 - **Cloudflare Email Workers** - Inbound email handling
 - **Resend** - Outbound email delivery
 - **Perplexity API** - Article summarization
@@ -53,9 +52,6 @@ wrangler secret put SEED_EMAIL
 ```bash
 # Create D1 database
 wrangler d1 create levinelinks-db
-
-# Create KV namespace
-wrangler kv:namespace create NEWSLETTERS
 
 # Update wrangler.toml with the IDs from above
 ```

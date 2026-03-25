@@ -1,6 +1,5 @@
 export interface Env {
   DB: D1Database;
-  NEWSLETTERS: KVNamespace;
   PERPLEXITY_API_KEY: string;
   RESEND_API_KEY: string;
   SITE_URL: string;

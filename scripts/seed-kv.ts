@@ -1,9 +1,12 @@
 import PostalMime from "postal-mime";
 import { wrapNewsletter } from "../src/services/wrapper";
 import { stripForwardedHeaders } from "../src/services/parser";
+import type { Env } from "../src/types";
 
 const EML_PATH =
   process.argv[2] || "./Money Stuff: Take the Crypto Out of the Indexes.eml";
+const FETCHER_BASE_URL = process.env.FETCHER_BASE_URL || "http://localhost:8787";
+const D1_DATABASE_NAME = process.env.D1_DATABASE_NAME || "levinelinks-db";
 
 async function main() {
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
@@ -37,7 +40,7 @@ async function main() {
   console.log(`   Date: ${date}`);
   console.log("\n🔄 Processing newsletter (this may take a while)...");
 
-  const result = await wrapNewsletter(originalHtml, perplexityKey, 40);
+  const result = await wrapNewsletter(originalHtml, createScriptEnv(perplexityKey));
 
   // Save locally for preview
   const previewHtml = `<!DOCTYPE html>
@@ -54,58 +57,68 @@ ${result.html}
   await Bun.write("./wrapped-preview.html", previewHtml);
   console.log("\n📝 Saved preview to wrapped-preview.html");
 
-  // Now upload to KV
-  console.log("\n☁️  Uploading to Cloudflare KV...");
+  console.log("\n☁️  Uploading to Cloudflare D1...");
 
-  const htmlKey = `${date}.html`;
-  const jsonKey = `${date}.json`;
-  const metadata = {
-    date,
-    subject,
-    preview: result.preview,
-    ogImage: result.ogImage,
-    processedAt: new Date().toISOString(),
-  };
+  const metadataSql = `
+    INSERT INTO newsletters (date, subject, html, preview, og_image, processed_at)
+    VALUES (${toSqlString(date)}, ${toSqlString(subject)}, ${toSqlString(result.html)}, ${toSqlString(result.preview)}, ${toSqlString(result.ogImage)}, unixepoch())
+    ON CONFLICT(date) DO UPDATE SET
+      subject = excluded.subject,
+      html = excluded.html,
+      preview = excluded.preview,
+      og_image = excluded.og_image,
+      processed_at = excluded.processed_at;
+  `.trim();
 
-  // Use wrangler to upload
-  const kvNamespaceId = "12fe9a29ec85487aa5d9eaeac7a8730c";
-
-  // Write temp files
-  await Bun.write(`/tmp/${htmlKey}`, result.html);
-  await Bun.write(`/tmp/${jsonKey}`, JSON.stringify(metadata));
-
-  const proc1 = Bun.spawn([
-    "bunx",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    htmlKey,
-    "--path",
-    `/tmp/${htmlKey}`,
-    "--namespace-id",
-    kvNamespaceId,
+  await runWrangler([
+    "d1",
+    "execute",
+    D1_DATABASE_NAME,
+    "--command",
+    metadataSql,
   ]);
-  await proc1.exited;
-
-  const proc2 = Bun.spawn([
-    "bunx",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    jsonKey,
-    "--path",
-    `/tmp/${jsonKey}`,
-    "--namespace-id",
-    kvNamespaceId,
-  ]);
-  await proc2.exited;
 
   console.log(`\n✅ Uploaded:`);
-  console.log(`   ${htmlKey}`);
-  console.log(`   ${jsonKey}`);
+  console.log(`   D1 row: newsletters(${date})`);
   console.log(`\n🌐 View at: https://levine.yet-to-be.com/newsletter/${date}`);
+}
+
+function createScriptEnv(perplexityApiKey: string): Env {
+  return {
+    DB: undefined as never,
+    PERPLEXITY_API_KEY: perplexityApiKey,
+    RESEND_API_KEY: "",
+    SITE_URL: "http://localhost:8787",
+    EMAIL_DOMAIN: "",
+    FETCHER: {
+      fetch(input: RequestInfo | URL, init?: RequestInit) {
+        const target = new URL(
+          typeof input === "string" ? input : input.toString(),
+        );
+        const url = new URL(
+          `${target.pathname}${target.search}${target.hash}`,
+          FETCHER_BASE_URL,
+        );
+        return fetch(url, init);
+      },
+    } as Env["FETCHER"],
+  };
+}
+
+async function runWrangler(args: string[]) {
+  const proc = Bun.spawn(["bunx", "wrangler", ...args], {
+    stdout: "inherit",
+    stderr: "inherit",
+  });
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    throw new Error(`wrangler ${args.join(" ")} failed with exit code ${exitCode}`);
+  }
+}
+
+function toSqlString(value: string | undefined): string {
+  if (value == null) return "NULL";
+  return `'${value.replace(/'/g, "''")}'`;
 }
 
 main().catch(console.error);

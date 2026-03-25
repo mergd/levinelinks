@@ -1,6 +1,6 @@
 import PostalMime from "postal-mime";
 import { getDb } from "../db";
-import { subscribers } from "../db/schema";
+import { newsletters, subscribers } from "../db/schema";
 import { wrapNewsletter } from "../services/wrapper";
 import { createResendClient } from "../services/mailer";
 import { stripForwardedHeaders } from "../services/parser";
@@ -98,25 +98,35 @@ async function processNewsletter(
 
     // Process all links (3 parallel fetchers handle subrequest limits)
     const result = await wrapNewsletter(originalHtml, env);
+    const db = getDb(env.DB);
+    const processedAt = new Date();
 
-    await env.NEWSLETTERS.put(`${date}.html`, result.html);
-    await env.NEWSLETTERS.put(
-      `${date}.json`,
-      JSON.stringify({
+    await db
+      .insert(newsletters)
+      .values({
         date,
         subject,
+        html: result.html,
         preview: result.preview,
         ogImage: result.ogImage,
-        processedAt: new Date().toISOString(),
-      }),
-    );
+        processedAt,
+      })
+      .onConflictDoUpdate({
+        target: newsletters.date,
+        set: {
+          subject,
+          html: result.html,
+          preview: result.preview,
+          ogImage: result.ogImage,
+          processedAt,
+        },
+      });
 
     if (!sendToSubscribers) {
       console.log(`Seeded: ${subject} (${date}) - not sending to subscribers`);
       return;
     }
 
-    const db = getDb(env.DB);
     const allSubscribers = await db.select().from(subscribers);
     const verifiedSubscribers = allSubscribers.filter((s) => s.verified);
 
