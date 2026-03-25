@@ -49,9 +49,14 @@ const SKIP_LINK_TEXT_PATTERNS = [
   /^view enhanced version$/i,
   /^get the newsletter$/i,
   /^subscribe to bloomberg\.com$/i,
+  /^subscribe at this link$/i,
 ];
 const FOOTER_START_PATTERNS = [
   />\s*If you(?:'|'|&#x27;|&#39;|&rsquo;)?d like to get Money Stuff in handy email form/i,
+  /subscribe(?:\s|&nbsp;|<[^>]+>)+at(?:\s|&nbsp;|<[^>]+>)+<a[^>]*>\s*this link\s*<\/a>/i,
+  /If you(?:'|'|&#x27;|&#39;|&rsquo;)?d like to get Money Stuff[\s\S]{0,500}?subscribe(?:\s|&nbsp;|<[^>]+>)+at(?:\s|&nbsp;|<[^>]+>)+<a[^>]*>\s*this link\s*<\/a>/i,
+  /subscribe at this link/i,
+  /Money Stuff and other great Bloomberg newsletters/i,
   />\s*Follow Us\s*</i,
   />\s*Get the newsletter\s*</i,
   /Like getting this newsletter\?/i,
