@@ -280,7 +280,7 @@ async function getCachedLinkResult(
 ): Promise<CachedLinkResult | null> {
   try {
     const cacheKey = await getLinkCacheKey(url);
-    const cached = await env.NEWSLETTERS.get(cacheKey, "json");
+    const cached = await env.LINK_CACHE.get(cacheKey, "json");
     return (cached as CachedLinkResult | null) ?? null;
   } catch {
     return null;
@@ -311,7 +311,7 @@ async function cacheLinkResult(
 ): Promise<void> {
   try {
     const cacheKey = await getLinkCacheKey(url);
-    await env.NEWSLETTERS.put(cacheKey, JSON.stringify(cached), {
+    await env.LINK_CACHE.put(cacheKey, JSON.stringify(cached), {
       expirationTtl: LINK_CACHE_TTL_SECONDS,
     });
   } catch {
