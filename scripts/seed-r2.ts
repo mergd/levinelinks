@@ -1,6 +1,8 @@
 import PostalMime from "postal-mime";
 import { wrapNewsletter } from "../src/services/wrapper";
 import { stripForwardedHeaders } from "../src/services/parser";
+import { R2_NEWSLETTER_BUCKET } from "./r2-config";
+import { ISSUES_INDEX_KEY } from "../src/services/newsletter-storage";
 
 const EML_PATH =
   process.argv[2] || "./Money Stuff: Take the Crypto Out of the Indexes.eml";
@@ -25,7 +27,6 @@ async function main() {
     .replace(/^(Fwd?:\s*)+/gi, "")
     .trim();
 
-  // Extract date from newsletter URL or use email date
   const urlDateMatch = rawHtml.match(/\/(\d{4}-\d{2}-\d{2})\//);
   const date =
     urlDateMatch?.[1] ||
@@ -39,7 +40,6 @@ async function main() {
 
   const result = await wrapNewsletter(originalHtml, perplexityKey, 40);
 
-  // Save locally for preview
   const previewHtml = `<!DOCTYPE html>
 <html>
 <head>
@@ -54,8 +54,7 @@ ${result.html}
   await Bun.write("./wrapped-preview.html", previewHtml);
   console.log("\n📝 Saved preview to wrapped-preview.html");
 
-  // Now upload to KV
-  console.log("\n☁️  Uploading to Cloudflare KV...");
+  console.log("\n☁️  Uploading to R2...");
 
   const htmlKey = `${date}.html`;
   const jsonKey = `${date}.json`;
@@ -67,47 +66,92 @@ ${result.html}
     processedAt: new Date().toISOString(),
   };
 
-  // Use wrangler to upload
-  const kvNamespaceId = "12fe9a29ec85487aa5d9eaeac7a8730c";
-
-  // Write temp files
   await Bun.write(`/tmp/${htmlKey}`, result.html);
   await Bun.write(`/tmp/${jsonKey}`, JSON.stringify(metadata));
 
-  const proc1 = Bun.spawn([
-    "bunx",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    htmlKey,
-    "--path",
-    `/tmp/${htmlKey}`,
-    "--namespace-id",
-    kvNamespaceId,
-  ]);
-  await proc1.exited;
+  const put = (
+    objectPath: string,
+    filePath: string,
+    contentType: string
+  ) =>
+    Bun.spawn(
+      [
+        "bunx",
+        "wrangler",
+        "r2",
+        "object",
+        "put",
+        objectPath,
+        "--file",
+        filePath,
+        "--remote",
+        "--content-type",
+        contentType,
+      ],
+      { stdout: "inherit", stderr: "inherit" }
+    );
 
-  const proc2 = Bun.spawn([
-    "bunx",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    jsonKey,
-    "--path",
+  let proc = put(
+    `${R2_NEWSLETTER_BUCKET}/${htmlKey}`,
+    `/tmp/${htmlKey}`,
+    "text/html; charset=utf-8"
+  );
+  await proc.exited;
+  if (proc.exitCode !== 0) process.exit(proc.exitCode ?? 1);
+
+  proc = put(
+    `${R2_NEWSLETTER_BUCKET}/${jsonKey}`,
     `/tmp/${jsonKey}`,
-    "--namespace-id",
-    kvNamespaceId,
-  ]);
-  await proc2.exited;
+    "application/json; charset=utf-8"
+  );
+  await proc.exited;
+  if (proc.exitCode !== 0) process.exit(proc.exitCode ?? 1);
+
+  const indexGet = Bun.spawn(
+    [
+      "bunx",
+      "wrangler",
+      "r2",
+      "object",
+      "get",
+      `${R2_NEWSLETTER_BUCKET}/${ISSUES_INDEX_KEY}`,
+      "--remote",
+      "-p",
+    ],
+    { stdout: "pipe", stderr: "pipe" }
+  );
+  const indexText = await new Response(indexGet.stdout).text();
+  await indexGet.exited;
+
+  let existingDates: string[] = [];
+  if (indexGet.exitCode === 0 && indexText.trim()) {
+    try {
+      const parsedIndex = JSON.parse(indexText) as { dates?: string[] };
+      if (Array.isArray(parsedIndex.dates)) existingDates = parsedIndex.dates;
+    } catch {}
+  }
+
+  const nextDates = [...new Set([...existingDates, date])].sort((a, b) =>
+    b.localeCompare(a)
+  );
+  await Bun.write(
+    `/tmp/${ISSUES_INDEX_KEY}`,
+    JSON.stringify({ dates: nextDates })
+  );
+
+  proc = put(
+    `${R2_NEWSLETTER_BUCKET}/${ISSUES_INDEX_KEY}`,
+    `/tmp/${ISSUES_INDEX_KEY}`,
+    "application/json; charset=utf-8"
+  );
+  await proc.exited;
+  if (proc.exitCode !== 0) process.exit(proc.exitCode ?? 1);
 
   console.log(`\n✅ Uploaded:`);
   console.log(`   ${htmlKey}`);
   console.log(`   ${jsonKey}`);
+  console.log(`   ${ISSUES_INDEX_KEY}`);
   console.log(`\n🌐 View at: https://levine.yet-to-be.com/newsletter/${date}`);
 }
 
 main().catch(console.error);
-
-

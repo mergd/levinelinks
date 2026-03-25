@@ -4,6 +4,11 @@ import { getDb } from "../db";
 import { subscribers } from "../db/schema";
 import { createResendClient } from "../services/mailer";
 import { pruneExpiredUnverified } from "./maintenance";
+import {
+  getIssueDates,
+  getNewsletterHtml,
+  getNewsletterMetaJson,
+} from "../services/newsletter-storage";
 import type { Env } from "../types";
 
 const HOME_ISSUE_LIMIT = 5;
@@ -174,31 +179,29 @@ interface IssueNavigation {
 }
 
 async function getAllIssues(env: Env): Promise<Issue[]> {
-  const issues: Issue[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const list = await env.NEWSLETTERS.list({ cursor });
-    cursor = list.list_complete ? undefined : list.cursor;
-
-    for (const key of list.keys) {
-      if (!key.name.endsWith(".json")) continue;
-      const data = await env.NEWSLETTERS.get(key.name);
-      if (!data) continue;
-
+  const dates = await getIssueDates(env);
+  const metas = await Promise.all(
+    dates.map(async (date) => {
+      const raw = await getNewsletterMetaJson(env, date);
+      if (!raw) return null;
       try {
-        const parsed = JSON.parse(data);
-        issues.push({
-          date: parsed.date,
-          subject: parsed.subject,
-          preview: parsed.preview,
-          ogImage: parsed.ogImage,
-        });
-      } catch {}
-    }
-  } while (cursor);
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        const issue: Issue = {
+          date: String(parsed.date ?? date),
+          subject: String(parsed.subject ?? ""),
+        };
+        if (typeof parsed.preview === "string") issue.preview = parsed.preview;
+        if (typeof parsed.ogImage === "string") issue.ogImage = parsed.ogImage;
+        return issue;
+      } catch {
+        return null;
+      }
+    })
+  );
 
-  return issues.sort((a, b) => b.date.localeCompare(a.date));
+  return metas
+    .filter((x): x is Issue => x != null)
+    .sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function formatDate(dateStr: string, relative: boolean = false): string {
@@ -453,8 +456,8 @@ async function handleUnsubscribe(url: URL, env: Env): Promise<Response> {
 }
 
 async function handleNewsletter(date: string, env: Env): Promise<Response> {
-  const html = await env.NEWSLETTERS.get(`${date}.html`);
-  const metaJson = await env.NEWSLETTERS.get(`${date}.json`);
+  const html = await getNewsletterHtml(env, date);
+  const metaJson = await getNewsletterMetaJson(env, date);
 
   if (!html) {
     return new Response("Newsletter not found", { status: 404 });

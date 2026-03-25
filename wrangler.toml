@@ -17,14 +17,13 @@ database_name = "levinelinks-db"
 database_id = "2dc9639b-41f5-4c77-b8f8-5e282d336cca"
 migrations_dir = "drizzle"
 
-# R2 bucket - enable R2 in CF dashboard first, then uncomment:
-# [[r2_buckets]]
-# binding = "NEWSLETTERS"
-# bucket_name = "levinelinks-newsletters"
-
-# Using KV for now (simpler setup)
-[[kv_namespaces]]
+[[r2_buckets]]
 binding = "NEWSLETTERS"
+bucket_name = "levinelinks-newsletters"
+
+# Link fetch cache (TTL); reuses former newsletter KV namespace ID — safe to delete old *.html/*.json keys after R2 migration
+[[kv_namespaces]]
+binding = "LINK_CACHE"
 id = "12fe9a29ec85487aa5d9eaeac7a8730c"
 
 # Email routing configured via dashboard for yet-to-be.com

@@ -18,7 +18,8 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled a
 
 - **Cloudflare Workers** - Edge compute
 - **Cloudflare D1** - SQLite database (subscribers)
-- **Cloudflare KV** - Newsletter HTML storage
+- **Cloudflare R2** - Newsletter HTML/JSON storage (manifest `issues-index.json` for listing without R2 list)
+- **Cloudflare KV** - Link fetch cache only (`LINK_CACHE`, TTL)
 - **Cloudflare Email Workers** - Inbound email handling
 - **Resend** - Outbound email delivery
 - **Perplexity API** - Article summarization
@@ -54,10 +55,13 @@ wrangler secret put SEED_EMAIL
 # Create D1 database
 wrangler d1 create levinelinks-db
 
-# Create KV namespace
-wrangler kv:namespace create NEWSLETTERS
+# Create R2 bucket (name must match wrangler.toml bucket_name)
+wrangler r2 bucket create levinelinks-newsletters
 
-# Update wrangler.toml with the IDs from above
+# KV namespace for link cache (can reuse an existing namespace ID in wrangler.toml)
+wrangler kv namespace create LINK_CACHE
+
+# Update wrangler.toml with the KV namespace id if you create a new one
 ```
 
 ### 4. Run migrations
@@ -87,6 +91,17 @@ In Cloudflare Dashboard:
 2. Set up DNS records (SPF, DKIM, DMARC)
 3. Verify domain
 
+## Migrating from KV to R2 (existing deployments)
+
+1. Create the R2 bucket (see setup above).
+2. Set `CLOUDFLARE_API_TOKEN` and run:
+
+```bash
+npx tsx scripts/migrate-kv-newsletters-to-r2.ts
+```
+
+This copies `YYYY-MM-DD.html` / `.json` from the old KV namespace into R2 and uploads `issues-index.json`. After verifying the site, you can delete those keys from KV (optional); keep the namespace for `LINK_CACHE`.
+
 ## Seeding the archive
 
 To backfill with previous newsletters:
@@ -109,6 +124,8 @@ This starts the worker locally at `http://localhost:8787`
 bun run test-parser     # Test link extraction
 bun run test-wrap       # Test newsletter wrapping (uses LIMIT env var)
 bun run test-full       # Full end-to-end test
+bun scripts/seed-r2.ts path/to/issue.eml   # Upload one processed issue to R2 (+ update index)
+bun scripts/fix-newsletter-r2.ts 2025-12-04 # Re-upload fixed HTML for a date
 ```
 
 ## Environment variables

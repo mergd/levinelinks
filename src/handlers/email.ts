@@ -4,6 +4,7 @@ import { subscribers } from "../db/schema";
 import { wrapNewsletter } from "../services/wrapper";
 import { createResendClient } from "../services/mailer";
 import { stripForwardedHeaders } from "../services/parser";
+import { putIssueAndUpdateIndex } from "../services/newsletter-storage";
 import type { Env } from "../types";
 
 const ALLOWED_SENDERS = ["noreply@news.bloomberg.com", "noreply@bloomberg.net"];
@@ -99,16 +100,17 @@ async function processNewsletter(
     // Process all links (3 parallel fetchers handle subrequest limits)
     const result = await wrapNewsletter(originalHtml, env);
 
-    await env.NEWSLETTERS.put(`${date}.html`, result.html);
-    await env.NEWSLETTERS.put(
-      `${date}.json`,
+    await putIssueAndUpdateIndex(
+      env,
+      date,
+      result.html,
       JSON.stringify({
         date,
         subject,
         preview: result.preview,
         ogImage: result.ogImage,
         processedAt: new Date().toISOString(),
-      }),
+      })
     );
 
     if (!sendToSubscribers) {
