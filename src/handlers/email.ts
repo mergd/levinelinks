@@ -97,7 +97,9 @@ async function processNewsletter(
     console.log(`Processing: ${subject} (${date})`);
 
     // Process all links (3 parallel fetchers handle subrequest limits)
-    const result = await wrapNewsletter(originalHtml, env);
+    const result = await wrapNewsletter(originalHtml, env, {
+      issueUrl: `${env.SITE_URL}/newsletter/${date}`,
+    });
     const db = getDb(env.DB);
     const processedAt = new Date();
 
@@ -137,7 +139,7 @@ async function processNewsletter(
     for (const subscriber of verifiedSubscribers) {
       const unsubscribeUrl = `${env.SITE_URL}/unsubscribe?token=${subscriber.unsubscribeToken}`;
       const emailHtml = addFooter(
-        result.html,
+        makeSummariesEmailSafe(result.html),
         env.SITE_URL,
         date,
         unsubscribeUrl,
@@ -183,6 +185,18 @@ function addFooter(
     return html.replace("</body>", `${footer}</body>`);
   }
   return html + footer;
+}
+
+function makeSummariesEmailSafe(html: string): string {
+  return html
+    .replace(
+      /<span role="button"[^>]*title="Show AI summary"[^>]*>[^<]*<\/span>/gi,
+      '<span style="font-size:11px;color:#777;margin-left:4px;">AI summary:</span>'
+    )
+    .replace(
+      /<span hidden style="font-size:13px;color:#555;margin-left:4px;">/gi,
+      '<span style="display:inline;font-size:13px;color:#555;margin-left:4px;">'
+    );
 }
 
 async function forwardEmail(

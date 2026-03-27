@@ -13,6 +13,8 @@ export interface Env {
 export interface FetchBatchItem {
   url: string;
   text?: string;
+  summaryContext?: string;
+  forceSummary?: boolean;
   fetchOgImage?: boolean;
 }
 

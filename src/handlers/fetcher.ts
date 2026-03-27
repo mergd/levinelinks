@@ -65,9 +65,17 @@ async function processBatch(
       const isNewsletter = isBloombergNewsletterUrl(result.resolvedUrl);
       const isPaywalled = isPaywalledUrl(result.resolvedUrl);
 
-      if (isPaywalled && !isNewsletter && batch.perplexityApiKey) {
+      const shouldFetchSummary =
+        !!batch.perplexityApiKey && !isNewsletter && (isPaywalled || !!item.forceSummary);
+
+      if (shouldFetchSummary) {
+        const perplexityApiKey = batch.perplexityApiKey!;
         const [summary, archiveUrl] = await Promise.all([
-          getPerplexitySummary(result.resolvedUrl, batch.perplexityApiKey, item.text),
+          getPerplexitySummary(
+            result.resolvedUrl,
+            perplexityApiKey,
+            item.summaryContext || item.text
+          ),
           getArchiveUrl(result.resolvedUrl),
         ]);
         result.summary = summary;
@@ -367,6 +375,8 @@ async function getArchiveUrl(url: string): Promise<string | undefined> {
       ) {
         return finalUrl;
       }
+
+      return searchUrl;
     }
     return undefined;
   } catch {

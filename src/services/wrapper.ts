@@ -119,6 +119,10 @@ export interface WrapResult {
   ogImage?: string;
 }
 
+interface WrapNewsletterOptions {
+  issueUrl?: string;
+}
+
 // Split array into N chunks
 function chunkArray<T>(arr: T[], numChunks: number): T[][] {
   const chunks: T[][] = [];
@@ -164,7 +168,8 @@ async function callFetcher(
 
 export async function wrapNewsletter(
   html: string,
-  env: Env
+  env: Env,
+  options: WrapNewsletterOptions = {}
 ): Promise<WrapResult> {
   let processedHtml = stripForwardingWrapper(html);
   processedHtml = fixMojibake(processedHtml);
@@ -196,8 +201,14 @@ export async function wrapNewsletter(
     url: string;
     text: string;
     fullMatch: string;
+    summaryContext?: string;
+    forceSummary?: boolean;
   }> = [];
   const footerStartIndex = findFooterStartIndex(processedHtml);
+  const thingsHappenStartIndex = findSectionStartIndex(
+    processedHtml,
+    "Things happen"
+  );
 
   let match;
   while ((match = linkRegex.exec(processedHtml)) !== null) {
@@ -207,11 +218,20 @@ export async function wrapNewsletter(
     if (footerStartIndex !== -1 && match.index >= footerStartIndex) continue;
     if (SKIP_LINK_TEXT_PATTERNS.some((pattern) => pattern.test(text))) continue;
 
+    const isInThingsHappen =
+      thingsHappenStartIndex !== -1 &&
+      match.index >= thingsHappenStartIndex &&
+      (footerStartIndex === -1 || match.index < footerStartIndex);
+
     linksToProcess.push({
       match: match[0],
       url,
       text: text || "",
       fullMatch: match[0],
+      summaryContext: isInThingsHappen
+        ? extractLinkSummaryContext(processedHtml, match.index, match[0])
+        : undefined,
+      forceSummary: isInThingsHappen,
     });
   }
 
@@ -222,10 +242,12 @@ export async function wrapNewsletter(
 
   // Prepare items for fetchers
   const fetchItems = uniqueUrls.map((url) => {
-    const link = linksToProcess.find((l) => l.url === url);
+    const link = [...linksToProcess].reverse().find((item) => item.url === url);
     return {
       url,
       text: link?.text,
+      summaryContext: link?.summaryContext,
+      forceSummary: link?.forceSummary,
       fetchOgImage: false,
     };
   });
@@ -264,8 +286,16 @@ export async function wrapNewsletter(
   }
 
   processedHtml = processedHtml.replace(
-    />View in browser<\/a>/gi,
-    ">View enhanced version</a>"
+    /<a([^>]*href=["'])([^"']+)(["'][^>]*)>\s*View (?:in browser|enhanced version)\s*<\/a>/gi,
+    (
+      _,
+      beforeHref: string,
+      currentHref: string,
+      afterHref: string
+    ) => {
+      const href = escapeHtml(options.issueUrl ?? currentHref);
+      return `<a${beforeHref}${href}${afterHref}>View enhanced version</a>`;
+    }
   );
 
   processedHtml = processFootnotes(processedHtml);
@@ -408,6 +438,46 @@ function findFooterStartIndex(html: string): number {
   }
 
   return earliestIndex;
+}
+
+function findSectionStartIndex(html: string, label: string): number {
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sectionPattern = new RegExp(`>\\s*${escapedLabel}\\s*<`, "i");
+  const matchedIndex = html.search(sectionPattern);
+  if (matchedIndex !== -1) return matchedIndex;
+
+  return html.toLowerCase().indexOf(label.toLowerCase());
+}
+
+function extractLinkSummaryContext(
+  html: string,
+  linkIndex: number,
+  fullMatch: string
+): string | undefined {
+  const contextStart = Math.max(0, linkIndex - 140);
+  const contextEnd = Math.min(html.length, linkIndex + fullMatch.length + 180);
+  const snippet = html
+    .slice(contextStart, contextEnd)
+    .replace(fullMatch, ` ${extractPlainText(fullMatch)} `);
+  const text = extractPlainText(snippet);
+
+  return text.length >= 12 ? text : undefined;
+}
+
+function extractPlainText(html: string): string {
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x27;|&#39;|&rsquo;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeInlineText(text: string): string {
