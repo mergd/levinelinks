@@ -3,7 +3,7 @@ CREATE TABLE `newsletters` (
 	`date` text NOT NULL,
 	`subject` text NOT NULL,
 	`link_count` integer DEFAULT 0,
-	`summary_count` integer DEFAULT 0,
+`summary_count` integer DEFAULT 0,.
 	`archive_count` integer DEFAULT 0,
 	`processed_at` integer NOT NULL
 );
