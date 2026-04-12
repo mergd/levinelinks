@@ -1,6 +1,6 @@
 # Levine Links
 
-Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled articles.
+Matt Levine's Money Stuff newsletter, enhanced with AI summaries for article links.
 
 **Live at [levine.yet-to-be.com](https://levine.yet-to-be.com)**
 
@@ -8,11 +8,12 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled a
 
 1. Receives Matt Levine's newsletter via email
 2. Extracts all links and resolves tracking URLs
-3. Generates AI summaries for paywalled articles (via Perplexity)
-4. Finds archived versions on archive.is
-5. Injects summaries inline with expandable previews
-6. Sends enhanced version to subscribers
-7. Hosts web archive of all issues
+3. Fetches article pages directly, strips boilerplate, and summarizes them with a cheap OpenRouter model
+4. Falls back to Perplexity when direct extraction fails or the page is blocked
+5. Finds archived versions on archive.is
+6. Injects summaries inline with expandable previews
+7. Sends enhanced version to subscribers
+8. Hosts web archive of all issues
 
 ## Stack
 
@@ -20,7 +21,8 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for paywalled a
 - **Cloudflare D1** - SQLite database (subscribers + newsletter archive)
 - **Cloudflare Email Workers** - Inbound email handling
 - **Resend** - Outbound email delivery
-- **Perplexity API** - Article summarization
+- **OpenRouter** - Low-cost article summarization from fetched page content
+- **Perplexity API** - Fallback summarization for blocked/paywalled pages
 
 ## Setup
 
@@ -43,6 +45,7 @@ For deployed Workers, also set runtime secrets/vars:
 
 ```bash
 wrangler secret put RESEND_API_KEY
+wrangler secret put OPENROUTER_API_KEY
 wrangler secret put PERPLEXITY_API_KEY
 wrangler secret put SEED_EMAIL
 ```
@@ -104,14 +107,14 @@ This starts the worker locally at `http://localhost:8787`
 ```bash
 bun run test-parser     # Test link extraction
 bun run test-wrap       # Test newsletter wrapping (uses LIMIT env var)
-bun run test-full       # Full end-to-end test
 ```
 
 ## Environment variables
 
 | Variable               | Description                          |
 | ---------------------- | ------------------------------------ |
-| `PERPLEXITY_API_KEY`   | Perplexity API key for summaries     |
+| `OPENROUTER_API_KEY`   | OpenRouter API key for direct summaries |
+| `PERPLEXITY_API_KEY`   | Perplexity fallback for blocked articles |
 | `RESEND_API_KEY`       | Resend API key for sending emails    |
 | `CLOUDFLARE_API_TOKEN` | CF API token (for wrangler)          |
 | `SEED_EMAIL`           | Your email for forwarding old issues |

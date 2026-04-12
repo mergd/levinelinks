@@ -9,9 +9,10 @@ const FETCHER_BASE_URL = process.env.FETCHER_BASE_URL || "http://localhost:8787"
 const D1_DATABASE_NAME = process.env.D1_DATABASE_NAME || "levinelinks-db";
 
 async function main() {
+  const openRouterKey = process.env.OPENROUTER_API_KEY;
   const perplexityKey = process.env.PERPLEXITY_API_KEY;
-  if (!perplexityKey) {
-    console.error("Missing PERPLEXITY_API_KEY");
+  if (!openRouterKey && !perplexityKey) {
+    console.error("Missing OPENROUTER_API_KEY or PERPLEXITY_API_KEY");
     process.exit(1);
   }
 
@@ -40,7 +41,13 @@ async function main() {
   console.log(`   Date: ${date}`);
   console.log("\n🔄 Processing newsletter (this may take a while)...");
 
-  const result = await wrapNewsletter(originalHtml, createScriptEnv(perplexityKey));
+  const result = await wrapNewsletter(
+    originalHtml,
+    createScriptEnv({
+      openRouterApiKey: openRouterKey,
+      perplexityApiKey: perplexityKey,
+    }),
+  );
 
   // Save locally for preview
   const previewHtml = `<!DOCTYPE html>
@@ -83,10 +90,14 @@ ${result.html}
   console.log(`\n🌐 View at: https://levine.yet-to-be.com/newsletter/${date}`);
 }
 
-function createScriptEnv(perplexityApiKey: string): Env {
+function createScriptEnv(keys: {
+  openRouterApiKey?: string;
+  perplexityApiKey?: string;
+}): Env {
   return {
     DB: undefined as never,
-    PERPLEXITY_API_KEY: perplexityApiKey,
+    PERPLEXITY_API_KEY: keys.perplexityApiKey || "",
+    OPENROUTER_API_KEY: keys.openRouterApiKey,
     RESEND_API_KEY: "",
     SITE_URL: "http://localhost:8787",
     EMAIL_DOMAIN: "",

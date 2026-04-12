@@ -492,7 +492,7 @@ async function handleNewsletter(date: string, env: Env): Promise<Response> {
     .from(newsletters)
     .where(eq(newsletters.date, date))
     .get();
-  const html = meta?.html ?? null;
+  const html = upgradeInteractiveMarkup(meta?.html ?? null);
 
   if (!html) {
     return new Response("Newsletter not found", { status: 404 });
@@ -610,4 +610,22 @@ function escapeHtml(text: string): string {
 
 function escapeXml(text: string): string {
   return escapeHtml(text).replace(/'/g, "&apos;");
+}
+
+function upgradeInteractiveMarkup(html: string | null): string | null {
+  if (!html) {
+    return html;
+  }
+
+  return html
+    .replace(
+      /<span role="button" tabindex="0" onclick="([^"]+)" style="([^"]*)" title="([^"]+)">([^<]*)<\/span>/gi,
+      (_match, _onclick: string, style: string, title: string, text: string) =>
+        `<button type="button" data-summary-toggle="true" aria-expanded="false" onclick="var s=this.nextElementSibling;var expanded=this.getAttribute('aria-expanded')==='true';s.hidden=expanded;this.setAttribute('aria-expanded',expanded?'false':'true');this.textContent=expanded?'▸ AI summary':'▾ AI summary';this.title=expanded?'Show AI summary':'Hide AI summary';" style="${style};border:none;background:none;padding:0;color:#777;font-family:inherit;font-size:11px;" title="${title}">${text === "▸" ? "▸ AI summary" : text}</button>`
+    )
+    .replace(
+      /<sup title="([^"]+)" style="([^"]*)">\[(\d+)\]<\/sup>/gi,
+      (_match, content: string, style: string, num: string) =>
+        `<sup style="white-space:nowrap;"><button type="button" data-footnote-toggle="true" aria-expanded="false" onclick="var s=this.nextElementSibling;var expanded=this.getAttribute('aria-expanded')==='true';s.hidden=expanded;this.setAttribute('aria-expanded',expanded?'false':'true');this.title=expanded?'Show footnote':'Hide footnote';" style="${style};border:none;background:none;padding:0;font-family:inherit;">[${num}]</button><span data-footnote-body="true" hidden style="font-size:13px;color:#555;margin-left:4px;vertical-align:baseline;"> ${content}</span></sup>`
+    );
 }

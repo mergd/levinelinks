@@ -31,13 +31,38 @@ const PAYWALLED_DOMAINS = [
   "stratechery.com",
 ];
 
+export const MODEL_NAME = "qwen/qwen3.5-9b";
+const MIN_ARTICLE_TEXT_LENGTH = 600;
+const MAX_ARTICLE_TEXT_LENGTH = 12000;
+const BLOCKED_PAGE_PATTERNS = [
+  /captcha/i,
+  /verify you are human/i,
+  /robot check/i,
+  /access denied/i,
+  /enable javascript/i,
+  /subscribe to continue/i,
+  /sign in to continue/i,
+];
+const BOILERPLATE_LINE_PATTERNS = [
+  /^advertisement$/i,
+  /^ad$/i,
+  /^cookie policy$/i,
+  /^privacy policy$/i,
+  /^terms of service$/i,
+  /^sign in$/i,
+  /^subscribe$/i,
+  /^skip to content$/i,
+  /^continue reading$/i,
+  /^all rights reserved$/i,
+];
+
 export async function handleFetchBatch(
   request: Request,
-  _env: Env
+  env: Env
 ): Promise<Response> {
   try {
     const body = (await request.json()) as FetchBatchRequest;
-    const results = await processBatch(body);
+    const results = await processBatch(body, env);
     return Response.json(results);
   } catch (e) {
     console.error("Fetcher error:", e);
@@ -46,9 +71,12 @@ export async function handleFetchBatch(
 }
 
 async function processBatch(
-  batch: FetchBatchRequest
+  batch: FetchBatchRequest,
+  env: Env
 ): Promise<FetchBatchResponse> {
   const results: LinkFetchResult[] = [];
+  const perplexityApiKey = batch.perplexityApiKey || env.PERPLEXITY_API_KEY;
+  const openRouterApiKey = batch.openRouterApiKey || env.OPENROUTER_API_KEY;
 
   for (const item of batch.items) {
     const result: LinkFetchResult = {
@@ -66,17 +94,22 @@ async function processBatch(
       const isPaywalled = isPaywalledUrl(result.resolvedUrl);
 
       const shouldFetchSummary =
-        !!batch.perplexityApiKey && !isNewsletter && (isPaywalled || !!item.forceSummary);
+        !isNewsletter &&
+        (isPaywalled || !!item.forceSummary) &&
+        (!!openRouterApiKey || !!perplexityApiKey);
 
       if (shouldFetchSummary) {
-        const perplexityApiKey = batch.perplexityApiKey!;
         const [summary, archiveUrl] = await Promise.all([
-          getPerplexitySummary(
+          getPreferredSummary(
             result.resolvedUrl,
-            perplexityApiKey,
-            item.summaryContext || item.text
+            {
+              openRouterApiKey,
+              perplexityApiKey,
+            },
+            item.summaryContext || item.text,
+            isPaywalled
           ),
-          getArchiveUrl(result.resolvedUrl),
+          isPaywalled ? getArchiveUrl(result.resolvedUrl) : Promise.resolve(undefined),
         ]);
         result.summary = summary;
         result.archiveUrl = archiveUrl;
@@ -94,6 +127,32 @@ async function processBatch(
   }
 
   return { results };
+}
+
+async function getPreferredSummary(
+  url: string,
+  keys: {
+    openRouterApiKey?: string;
+    perplexityApiKey?: string;
+  },
+  articleHint?: string,
+  isPaywalled?: boolean
+): Promise<string | undefined> {
+  if (keys.openRouterApiKey) {
+    const articleText = await fetchArticleText(url, isPaywalled);
+    if (articleText) {
+      const directSummary = await getOpenRouterSummary(
+        url,
+        articleText,
+        keys.openRouterApiKey,
+        articleHint
+      );
+      if (directSummary) return directSummary;
+    }
+  }
+
+  if (!keys.perplexityApiKey) return undefined;
+  return getPerplexitySummary(url, keys.perplexityApiKey, articleHint);
 }
 
 async function resolveTrackingUrl(url: string, depth = 0): Promise<string> {
@@ -229,13 +288,261 @@ function getFaviconUrl(url: string): string {
   }
 }
 
+async function fetchArticleText(
+  url: string,
+  isPaywalled?: boolean
+): Promise<string | undefined> {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        Accept: "text/html,application/xhtml+xml",
+      },
+      redirect: "follow",
+    });
+
+    if (!response.ok) return undefined;
+
+    const contentType = response.headers.get("content-type") || "";
+    if (!contentType.includes("text/html") && !contentType.includes("application/xhtml+xml")) {
+      return undefined;
+    }
+
+    const html = await response.text();
+    if (BLOCKED_PAGE_PATTERNS.some((pattern) => pattern.test(html))) {
+      return undefined;
+    }
+
+    const articleText = extractArticleText(html);
+    if (!articleText) return undefined;
+
+    if (isPaywalled && articleText.length < MIN_ARTICLE_TEXT_LENGTH) {
+      return undefined;
+    }
+
+    return articleText;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractArticleText(html: string): string | undefined {
+  const jsonLdBody = extractJsonLdArticleBody(html);
+  if (jsonLdBody && jsonLdBody.length >= MIN_ARTICLE_TEXT_LENGTH) {
+    return jsonLdBody.slice(0, MAX_ARTICLE_TEXT_LENGTH);
+  }
+
+  const cleanedHtml = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<(svg|iframe|footer|nav|aside|form|button)\b[^>]*>[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ");
+
+  const candidates = [
+    ...extractCandidateTexts(cleanedHtml, /<article\b[^>]*>([\s\S]*?)<\/article>/gi),
+    ...extractCandidateTexts(cleanedHtml, /<main\b[^>]*>([\s\S]*?)<\/main>/gi),
+  ];
+
+  const paragraphText = htmlToText((cleanedHtml.match(/<p\b[^>]*>[\s\S]*?<\/p>/gi) || []).join("\n"));
+  if (paragraphText) {
+    candidates.push(paragraphText);
+  }
+
+  const bodyMatch = cleanedHtml.match(/<body\b[^>]*>([\s\S]*?)<\/body>/i);
+  if (bodyMatch?.[1]) {
+    const bodyText = htmlToText(bodyMatch[1]);
+    if (bodyText) {
+      candidates.push(bodyText);
+    }
+  }
+
+  const best = candidates
+    .map(cleanArticleText)
+    .filter((candidate) => candidate.length >= 300)
+    .sort((a, b) => b.length - a.length)[0];
+
+  if (!best) return undefined;
+  return best.slice(0, MAX_ARTICLE_TEXT_LENGTH);
+}
+
+function extractCandidateTexts(html: string, pattern: RegExp): string[] {
+  const matches = Array.from(html.matchAll(pattern));
+  return matches
+    .map((match) => htmlToText(match[1] || ""))
+    .filter((text): text is string => !!text);
+}
+
+function htmlToText(html: string): string | undefined {
+  const text = decodeHtmlEntities(
+    html
+      .replace(/<(br|\/p|\/div|\/section|\/article|\/main|\/li|\/h[1-6])>/gi, "\n")
+      .replace(/<li\b[^>]*>/gi, "• ")
+      .replace(/<[^>]+>/g, " ")
+  )
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return text || undefined;
+}
+
+function cleanArticleText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 25)
+    .filter((line) => !BOILERPLATE_LINE_PATTERNS.some((pattern) => pattern.test(line)))
+    .filter((line) => !line.includes("{") && !line.includes("}"))
+    .join("\n\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x27;|&#39;|&rsquo;/gi, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&mdash;/gi, "-")
+    .replace(/&ndash;/gi, "-")
+    .replace(/&#(\d+);/g, (_, code: string) => {
+      const numeric = Number.parseInt(code, 10);
+      return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_, code: string) => {
+      const numeric = Number.parseInt(code, 16);
+      return Number.isFinite(numeric) ? String.fromCharCode(numeric) : "";
+    });
+}
+
+function extractJsonLdArticleBody(html: string): string | undefined {
+  for (const match of html.matchAll(
+    /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  )) {
+    const parsed = tryParseJsonLd(match[1] || "");
+    const articleBody = findArticleBody(parsed);
+    if (articleBody && articleBody.length >= MIN_ARTICLE_TEXT_LENGTH) {
+      return cleanArticleText(decodeHtmlEntities(articleBody));
+    }
+  }
+
+  return undefined;
+}
+
+function tryParseJsonLd(raw: string): unknown {
+  try {
+    return JSON.parse(raw.trim());
+  } catch {
+    return undefined;
+  }
+}
+
+function findArticleBody(value: unknown): string | undefined {
+  if (!value) return undefined;
+
+  if (typeof value === "string") {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const articleBody = findArticleBody(item);
+      if (articleBody) return articleBody;
+    }
+    return undefined;
+  }
+
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const direct = record.articleBody;
+    if (typeof direct === "string" && direct.trim().length > 0) {
+      return direct.trim();
+    }
+
+    for (const nestedValue of Object.values(record)) {
+      const articleBody = findArticleBody(nestedValue);
+      if (articleBody) return articleBody;
+    }
+  }
+
+  return undefined;
+}
+
+async function getOpenRouterSummary(
+  url: string,
+  articleText: string,
+  apiKey: string,
+  articleHint?: string
+): Promise<string | undefined> {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://levine.yet-to-be.com",
+        "X-Title": "Levine Links",
+      },
+      body: JSON.stringify({
+        model: MODEL_NAME,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You summarize article text for a newsletter. Write 2-3 factual, concise sentences with no hype, no citations, and no preamble.",
+          },
+          {
+            role: "user",
+            content: buildOpenRouterPrompt(url, articleText, articleHint),
+          },
+        ],
+        max_tokens: 180,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) return undefined;
+
+    const data = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content;
+    return cleanSummaryContent(content);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildOpenRouterPrompt(
+  url: string,
+  articleText: string,
+  articleHint?: string
+): string {
+  const parts = [
+    `URL: ${url}`,
+    articleHint ? `Context: ${articleHint}` : undefined,
+    "",
+    "Article text:",
+    articleText.slice(0, MAX_ARTICLE_TEXT_LENGTH),
+  ].filter(Boolean);
+
+  return parts.join("\n");
+}
+
 async function getPerplexitySummary(
   url: string,
   apiKey: string,
-  articleTitle?: string
+  articleHint?: string
 ): Promise<string | undefined> {
   try {
-    const userPrompt = buildSummaryPrompt(url, articleTitle);
+    const userPrompt = buildSummaryPrompt(url, articleHint);
 
     const response = await fetch("https://api.perplexity.ai/chat/completions", {
       method: "POST",
@@ -265,46 +572,14 @@ async function getPerplexitySummary(
     const data = (await response.json()) as {
       choices: Array<{ message: { content: string } }>;
     };
-    const content = data.choices[0]?.message?.content;
-
-    if (!content || content.length < 30) return undefined;
-
-    const lower = content.toLowerCase();
-    const badPhrases = [
-      "unable to",
-      "cannot access",
-      "i don't have",
-      "no news article available",
-      "i cannot",
-      "i'm unable",
-      "not available",
-      "page not found",
-      "access denied",
-    ];
-
-    if (badPhrases.some((p) => lower.includes(p))) return undefined;
-
-    // Clean up intro phrases and citations
-    return content
-      .replace(
-        /^The (article|piece|report|story|post|blog)( from [^.]+)? (discusses|explains|covers|details|examines|explores|highlights|reports|describes|analyzes)/i,
-        ""
-      )
-      .replace(
-        /^This (article|piece|report|story|post|blog) (discusses|explains|covers|details|examines|explores|highlights|reports|describes|analyzes)/i,
-        ""
-      )
-      .replace(/\[\d+\]/g, "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .replace(/^./, (c) => c.toUpperCase());
+    return cleanSummaryContent(data.choices[0]?.message?.content);
   } catch {
     return undefined;
   }
 }
 
-function buildSummaryPrompt(url: string, articleTitle?: string): string {
-  const safeTitle = articleTitle?.trim();
+function buildSummaryPrompt(url: string, articleHint?: string): string {
+  const safeTitle = articleHint?.trim();
   const slugHint = getArticleSlugHint(url);
 
   if (isBloombergArticleUrl(url)) {
@@ -322,6 +597,39 @@ function buildSummaryPrompt(url: string, articleTitle?: string): string {
   }
 
   return `Search for and summarize the news article at this URL: ${url}`;
+}
+
+function cleanSummaryContent(content?: string): string | undefined {
+  if (!content || content.length < 30) return undefined;
+
+  const lower = content.toLowerCase();
+  const badPhrases = [
+    "unable to",
+    "cannot access",
+    "i don't have",
+    "no news article available",
+    "i cannot",
+    "i'm unable",
+    "not available",
+    "page not found",
+    "access denied",
+  ];
+
+  if (badPhrases.some((phrase) => lower.includes(phrase))) return undefined;
+
+  return content
+    .replace(
+      /^The (article|piece|report|story|post|blog)( from [^.]+)? (discusses|explains|covers|details|examines|explores|highlights|reports|describes|analyzes)/i,
+      ""
+    )
+    .replace(
+      /^This (article|piece|report|story|post|blog) (discusses|explains|covers|details|examines|explores|highlights|reports|describes|analyzes)/i,
+      ""
+    )
+    .replace(/\[\d+\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (char) => char.toUpperCase());
 }
 
 function isBloombergArticleUrl(url: string): boolean {

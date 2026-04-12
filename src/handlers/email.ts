@@ -188,14 +188,28 @@ function addFooter(
 }
 
 function makeSummariesEmailSafe(html: string, issueUrl: string): string {
+  const webSummaryLink = `<a href="${issueUrl}" style="font-size:11px;color:#777;margin-left:4px;text-decoration:none;">[AI summary on web]</a>`;
+
   return html
     .replace(
-      /<span role="button"[^>]*title="Show AI summary"[^>]*>[^<]*<\/span>/gi,
-      `<a href="${issueUrl}" style="font-size:11px;color:#777;margin-left:4px;text-decoration:none;">[AI summary on web]</a>`
+      /<button[^>]*data-summary-toggle=["']true["'][^>]*>[\s\S]*?<\/button>\s*<span[^>]*data-summary-body=["']true["'][^>]*>[\s\S]*?<\/span>/gi,
+      webSummaryLink
+    )
+    .replace(
+      /<span role="button"[^>]*title="Show AI summary"[^>]*>[^<]*<\/span>\s*<span hidden[^>]*>[\s\S]*?<\/span>/gi,
+      webSummaryLink
+    )
+    .replace(
+      /<span[^>]*data-summary-body=["']true["'][^>]*>[\s\S]*?<\/span>/gi,
+      ""
     )
     .replace(
       /<span hidden style="font-size:13px;color:#555;margin-left:4px;">[\s\S]*?<\/span>/gi,
       ""
+    )
+    .replace(
+      /<sup[^>]*>\s*<button[^>]*data-footnote-toggle=["']true["'][^>]*>(\[\d+\])<\/button>\s*<span[^>]*data-footnote-body=["']true["'][^>]*>[\s\S]*?<\/span>\s*<\/sup>/gi,
+      `<sup style="color:#666;font-size:11px;vertical-align:super;">$1</sup>`
     );
 }
 

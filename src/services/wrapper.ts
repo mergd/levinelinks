@@ -136,14 +136,24 @@ function chunkArray<T>(arr: T[], numChunks: number): T[][] {
 // Call a fetcher worker via service binding
 async function callFetcher(
   fetcher: Fetcher,
-  items: { url: string; text?: string; fetchOgImage?: boolean }[],
-  perplexityApiKey: string
+  items: {
+    url: string;
+    text?: string;
+    summaryContext?: string;
+    forceSummary?: boolean;
+    fetchOgImage?: boolean;
+  }[],
+  keys: {
+    perplexityApiKey?: string;
+    openRouterApiKey?: string;
+  }
 ): Promise<LinkFetchResult[]> {
   if (items.length === 0) return [];
 
   const request: FetchBatchRequest = {
     items,
-    perplexityApiKey,
+    perplexityApiKey: keys.perplexityApiKey,
+    openRouterApiKey: keys.openRouterApiKey,
   };
 
   try {
@@ -229,7 +239,13 @@ export async function wrapNewsletter(
       text: text || "",
       fullMatch: match[0],
       summaryContext: isInThingsHappen
-        ? extractLinkSummaryContext(processedHtml, match.index, match[0])
+        ? extractThingsHappenItemContext(
+            processedHtml,
+            match.index,
+            match[0],
+            thingsHappenStartIndex,
+            footerStartIndex
+          ) ?? extractLinkSummaryContext(processedHtml, match.index, match[0])
         : undefined,
       forceSummary: isInThingsHappen,
     });
@@ -256,7 +272,10 @@ export async function wrapNewsletter(
   const chunks = chunkArray(fetchItems, 3);
 
   const fetchPromises = chunks.map((chunk) =>
-    callFetcher(env.FETCHER, chunk, env.PERPLEXITY_API_KEY)
+    callFetcher(env.FETCHER, chunk, {
+      perplexityApiKey: env.PERPLEXITY_API_KEY,
+      openRouterApiKey: env.OPENROUTER_API_KEY,
+    })
   );
 
   const results = await Promise.all(fetchPromises);
@@ -326,7 +345,10 @@ export async function wrapNewsletter(
     const ogResults = await callFetcher(
       env.FETCHER,
       ogCandidates,
-      env.PERPLEXITY_API_KEY
+      {
+        perplexityApiKey: env.PERPLEXITY_API_KEY,
+        openRouterApiKey: env.OPENROUTER_API_KEY,
+      }
     );
     ogImage = ogResults.find((r) => r.ogImage)?.ogImage;
     if (ogImage) {
@@ -357,9 +379,8 @@ function processFootnotes(html: string): string {
       `<a\\s+href="#footnote-${num}"[^>]*>\\s*<span>\\[${num}\\]</span>\\s*</a>`,
       "gi"
     );
-    const replacement = `<sup title="${escapeHtml(
-      normalizeInlineText(content)
-    )}" style="color:#666;font-size:11px;vertical-align:super;cursor:help;">[${num}]</sup>`;
+    const footnoteHtml = renderInlineRichText(content);
+    const replacement = `<sup style="white-space:nowrap;"><button type="button" data-footnote-toggle="true" aria-expanded="false" onclick="var s=this.nextElementSibling;var expanded=this.getAttribute('aria-expanded')==='true';s.hidden=expanded;this.setAttribute('aria-expanded',expanded?'false':'true');this.title=expanded?'Show footnote':'Hide footnote';" style="color:#666;font-size:11px;vertical-align:super;cursor:pointer;border:none;background:none;padding:0;font-family:inherit;">[${num}]</button><span data-footnote-body="true" hidden style="font-size:13px;color:#555;margin-left:4px;vertical-align:baseline;"> ${footnoteHtml}</span></sup>`;
     result = result.replace(refPattern, replacement);
   }
 
@@ -404,8 +425,8 @@ function generateEnrichedLink(
       ? `<a href="${data.archiveUrl}" target="_blank" rel="noopener" style="text-decoration:none;font-size:13px;vertical-align:middle;margin-right:4px;" title="Read archived (no paywall)">📰</a>`
       : "";
 
-    result += `${archiveLink}<span role="button" tabindex="0" onclick="var s=this.nextElementSibling;s.hidden=!s.hidden;this.textContent=s.hidden?'▸':'▾';this.title=s.hidden?'Show AI summary':'Hide AI summary';" style="cursor:pointer;font-size:13px;vertical-align:middle;margin-left:4px;user-select:none;" title="Show AI summary">▸</span>`;
-    result += `<span hidden style="font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
+    result += `${archiveLink}<button type="button" data-summary-toggle="true" aria-expanded="false" onclick="var s=this.nextElementSibling;var expanded=this.getAttribute('aria-expanded')==='true';s.hidden=expanded;this.setAttribute('aria-expanded',expanded?'false':'true');this.textContent=expanded?'▸ AI summary':'▾ AI summary';this.title=expanded?'Show AI summary':'Hide AI summary';" style="cursor:pointer;font-size:11px;vertical-align:middle;margin-left:4px;user-select:none;border:none;background:none;padding:0;color:#777;font-family:inherit;" title="Show AI summary">▸ AI summary</button>`;
+    result += `<span data-summary-body="true" hidden style="font-size:13px;color:#555;margin-left:4px;"> ${summaryHtml}`;
     result += ` <a href="${data.resolvedUrl}" target="_blank" rel="noopener" style="color:#1976d2;font-size:11px;text-decoration:none;">[read]</a>`;
     if (data.archiveUrl) {
       result += ` <a href="${data.archiveUrl}" target="_blank" rel="noopener" style="color:#2e7d32;font-size:11px;text-decoration:none;">[archive]</a>`;
@@ -462,6 +483,85 @@ function extractLinkSummaryContext(
   const text = extractPlainText(snippet);
 
   return text.length >= 12 ? text : undefined;
+}
+
+function extractThingsHappenItemContext(
+  html: string,
+  linkIndex: number,
+  fullMatch: string,
+  sectionStartIndex: number,
+  footerStartIndex: number
+): string | undefined {
+  const sectionEndIndex = footerStartIndex !== -1 ? footerStartIndex : html.length;
+  if (
+    sectionStartIndex === -1 ||
+    linkIndex < sectionStartIndex ||
+    linkIndex >= sectionEndIndex
+  ) {
+    return undefined;
+  }
+
+  const localLinkIndex = linkIndex - sectionStartIndex;
+  const sectionHtml = html.slice(sectionStartIndex, sectionEndIndex);
+  const marker = "__LEVINE_LINK_MARKER__";
+  const markedHtml =
+    sectionHtml.slice(0, localLinkIndex) +
+    `${marker}${extractPlainText(fullMatch)}${marker}` +
+    sectionHtml.slice(localLinkIndex + fullMatch.length);
+  const text = extractPlainText(markedHtml);
+  const markerStart = text.indexOf(marker);
+
+  if (markerStart === -1) {
+    return undefined;
+  }
+
+  const markerEnd = text.indexOf(marker, markerStart + marker.length);
+  const sentenceStart = findSentenceBoundary(text, markerStart, -1);
+  const sentenceEnd = findSentenceBoundary(
+    text,
+    markerEnd === -1 ? markerStart + marker.length : markerEnd,
+    1
+  );
+  const context = text
+    .slice(sentenceStart, sentenceEnd)
+    .replaceAll(marker, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return context.length >= 12 ? context : undefined;
+}
+
+function findSentenceBoundary(
+  text: string,
+  startIndex: number,
+  direction: -1 | 1
+): number {
+  if (direction === -1) {
+    for (let index = startIndex - 1; index >= 0; index -= 1) {
+      if (isSentenceBoundary(text, index)) {
+        return index + 1;
+      }
+    }
+    return 0;
+  }
+
+  for (let index = startIndex; index < text.length; index += 1) {
+    if (isSentenceBoundary(text, index)) {
+      return index + 1;
+    }
+  }
+
+  return text.length;
+}
+
+function isSentenceBoundary(text: string, index: number): boolean {
+  const char = text[index];
+  if (char !== "." && char !== "!" && char !== "?") {
+    return false;
+  }
+
+  const next = text[index + 1];
+  return next === undefined || /\s/.test(next);
 }
 
 function extractPlainText(html: string): string {
