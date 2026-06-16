@@ -4,6 +4,7 @@ import type {
   FetchBatchResponse,
   LinkFetchResult,
 } from "../types";
+import { renderFootnoteRef } from "./footnote-markup";
 
 interface EnrichedLinkData {
   originalUrl: string;
@@ -380,7 +381,7 @@ function processFootnotes(html: string): string {
       "gi"
     );
     const footnoteHtml = renderInlineRichText(content);
-    const replacement = `<sup style="white-space:nowrap;"><button type="button" data-footnote-toggle="true" aria-expanded="false" onclick="var s=this.nextElementSibling;var expanded=this.getAttribute('aria-expanded')==='true';s.hidden=expanded;this.setAttribute('aria-expanded',expanded?'false':'true');this.title=expanded?'Show footnote':'Hide footnote';" style="color:#666;font-size:11px;vertical-align:super;cursor:pointer;border:none;background:none;padding:0;font-family:inherit;">[${num}]</button><span data-footnote-body="true" hidden style="font-size:13px;color:#555;margin-left:4px;vertical-align:baseline;"> ${footnoteHtml}</span></sup>`;
+    const replacement = renderFootnoteRef(num, footnoteHtml);
     result = result.replace(refPattern, replacement);
   }
 

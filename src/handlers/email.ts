@@ -208,6 +208,10 @@ function makeSummariesEmailSafe(html: string, issueUrl: string): string {
       ""
     )
     .replace(
+      /<sup[^>]*>\s*<button[^>]*data-footnote-toggle=["']true["'][^>]*>(\[\d+\])<\/button>\s*<\/sup>\s*<span[^>]*data-footnote-body=["']true["'][^>]*>[\s\S]*?<\/span>/gi,
+      `<sup style="color:#666;font-size:11px;vertical-align:super;">$1</sup>`
+    )
+    .replace(
       /<sup[^>]*>\s*<button[^>]*data-footnote-toggle=["']true["'][^>]*>(\[\d+\])<\/button>\s*<span[^>]*data-footnote-body=["']true["'][^>]*>[\s\S]*?<\/span>\s*<\/sup>/gi,
       `<sup style="color:#666;font-size:11px;vertical-align:super;">$1</sup>`
     );
