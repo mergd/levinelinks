@@ -145,7 +145,6 @@ async function callFetcher(
     fetchOgImage?: boolean;
   }[],
   keys: {
-    perplexityApiKey?: string;
     openRouterApiKey?: string;
   }
 ): Promise<LinkFetchResult[]> {
@@ -153,7 +152,6 @@ async function callFetcher(
 
   const request: FetchBatchRequest = {
     items,
-    perplexityApiKey: keys.perplexityApiKey,
     openRouterApiKey: keys.openRouterApiKey,
   };
 
@@ -274,7 +272,6 @@ export async function wrapNewsletter(
 
   const fetchPromises = chunks.map((chunk) =>
     callFetcher(env.FETCHER, chunk, {
-      perplexityApiKey: env.PERPLEXITY_API_KEY,
       openRouterApiKey: env.OPENROUTER_API_KEY,
     })
   );
@@ -347,7 +344,6 @@ export async function wrapNewsletter(
       env.FETCHER,
       ogCandidates,
       {
-        perplexityApiKey: env.PERPLEXITY_API_KEY,
         openRouterApiKey: env.OPENROUTER_API_KEY,
       }
     );

@@ -10,9 +10,8 @@ const D1_DATABASE_NAME = process.env.D1_DATABASE_NAME || "levinelinks-db";
 
 async function main() {
   const openRouterKey = process.env.OPENROUTER_API_KEY;
-  const perplexityKey = process.env.PERPLEXITY_API_KEY;
-  if (!openRouterKey && !perplexityKey) {
-    console.error("Missing OPENROUTER_API_KEY or PERPLEXITY_API_KEY");
+  if (!openRouterKey) {
+    console.error("Missing OPENROUTER_API_KEY");
     process.exit(1);
   }
 
@@ -45,7 +44,6 @@ async function main() {
     originalHtml,
     createScriptEnv({
       openRouterApiKey: openRouterKey,
-      perplexityApiKey: perplexityKey,
     }),
   );
 
@@ -92,11 +90,9 @@ ${result.html}
 
 function createScriptEnv(keys: {
   openRouterApiKey?: string;
-  perplexityApiKey?: string;
 }): Env {
   return {
     DB: undefined as never,
-    PERPLEXITY_API_KEY: keys.perplexityApiKey || "",
     OPENROUTER_API_KEY: keys.openRouterApiKey,
     RESEND_API_KEY: "",
     SITE_URL: "http://localhost:8787",
@@ -133,5 +129,3 @@ function toSqlString(value: string | undefined): string {
 }
 
 main().catch(console.error);
-
-

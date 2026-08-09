@@ -8,8 +8,8 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for article lin
 
 1. Receives Matt Levine's newsletter via email
 2. Extracts all links and resolves tracking URLs
-3. Fetches article pages directly, strips boilerplate, and summarizes them with a cheap OpenRouter model
-4. Falls back to Perplexity when direct extraction fails or the page is blocked
+3. Fetches article pages directly, strips boilerplate, and summarizes them with OpenRouter (`openrouter/free`, then `qwen/qwen3.8-max`)
+4. Falls back to OpenRouter `perplexity/sonar` (built-in web search) when the page is blocked or scrape fails
 5. Finds archived versions on archive.is
 6. Injects summaries inline with expandable previews
 7. Sends enhanced version to subscribers
@@ -21,8 +21,7 @@ Matt Levine's Money Stuff newsletter, enhanced with AI summaries for article lin
 - **Cloudflare D1** - SQLite database (subscribers + newsletter archive)
 - **Cloudflare Email Workers** - Inbound email handling
 - **Resend** - Outbound email delivery
-- **OpenRouter** - Low-cost article summarization from fetched page content
-- **Perplexity API** - Fallback summarization for blocked/paywalled pages
+- **OpenRouter** - Article summarization from fetched page content, plus Sonar search fallback
 
 ## Setup
 
@@ -46,7 +45,6 @@ For deployed Workers, also set runtime secrets/vars:
 ```bash
 wrangler secret put RESEND_API_KEY
 wrangler secret put OPENROUTER_API_KEY
-wrangler secret put PERPLEXITY_API_KEY
 wrangler secret put SEED_EMAIL
 ```
 
@@ -113,8 +111,7 @@ bun run test-wrap       # Test newsletter wrapping (uses LIMIT env var)
 
 | Variable               | Description                          |
 | ---------------------- | ------------------------------------ |
-| `OPENROUTER_API_KEY`   | OpenRouter API key for direct summaries |
-| `PERPLEXITY_API_KEY`   | Perplexity fallback for blocked articles |
+| `OPENROUTER_API_KEY`   | OpenRouter API key for article summaries |
 | `RESEND_API_KEY`       | Resend API key for sending emails    |
 | `CLOUDFLARE_API_TOKEN` | CF API token (for wrangler)          |
 | `SEED_EMAIL`           | Your email for forwarding old issues |

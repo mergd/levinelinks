@@ -31,7 +31,9 @@ const PAYWALLED_DOMAINS = [
   "stratechery.com",
 ];
 
-export const MODEL_NAME = "qwen/qwen3.5-9b";
+export const FREE_MODEL_NAME = "openrouter/free";
+export const FALLBACK_MODEL_NAME = "qwen/qwen3.8-max";
+export const SEARCH_MODEL_NAME = "perplexity/sonar";
 const MIN_ARTICLE_TEXT_LENGTH = 600;
 const MAX_ARTICLE_TEXT_LENGTH = 12000;
 const BLOCKED_PAGE_PATTERNS = [
@@ -75,7 +77,6 @@ async function processBatch(
   env: Env
 ): Promise<FetchBatchResponse> {
   const results: LinkFetchResult[] = [];
-  const perplexityApiKey = batch.perplexityApiKey || env.PERPLEXITY_API_KEY;
   const openRouterApiKey = batch.openRouterApiKey || env.OPENROUTER_API_KEY;
 
   for (const item of batch.items) {
@@ -96,16 +97,13 @@ async function processBatch(
       const shouldFetchSummary =
         !isNewsletter &&
         (isPaywalled || !!item.forceSummary) &&
-        (!!openRouterApiKey || !!perplexityApiKey);
+        !!openRouterApiKey;
 
       if (shouldFetchSummary) {
         const [summary, archiveUrl] = await Promise.all([
           getPreferredSummary(
             result.resolvedUrl,
-            {
-              openRouterApiKey,
-              perplexityApiKey,
-            },
+            openRouterApiKey,
             item.summaryContext || item.text,
             isPaywalled
           ),
@@ -131,28 +129,22 @@ async function processBatch(
 
 async function getPreferredSummary(
   url: string,
-  keys: {
-    openRouterApiKey?: string;
-    perplexityApiKey?: string;
-  },
+  openRouterApiKey: string,
   articleHint?: string,
   isPaywalled?: boolean
 ): Promise<string | undefined> {
-  if (keys.openRouterApiKey) {
-    const articleText = await fetchArticleText(url, isPaywalled);
-    if (articleText) {
-      const directSummary = await getOpenRouterSummary(
-        url,
-        articleText,
-        keys.openRouterApiKey,
-        articleHint
-      );
-      if (directSummary) return directSummary;
-    }
+  const articleText = await fetchArticleText(url, isPaywalled);
+  if (articleText) {
+    const directSummary = await getOpenRouterSummary(
+      url,
+      articleText,
+      openRouterApiKey,
+      articleHint
+    );
+    if (directSummary) return directSummary;
   }
 
-  if (!keys.perplexityApiKey) return undefined;
-  return getPerplexitySummary(url, keys.perplexityApiKey, articleHint);
+  return getOpenRouterSearchSummary(url, openRouterApiKey, articleHint);
 }
 
 async function resolveTrackingUrl(url: string, depth = 0): Promise<string> {
@@ -481,29 +473,66 @@ async function getOpenRouterSummary(
   apiKey: string,
   articleHint?: string
 ): Promise<string | undefined> {
+  const prompt = buildOpenRouterPrompt(url, articleText, articleHint);
+
+  for (const model of [FREE_MODEL_NAME, FALLBACK_MODEL_NAME]) {
+    const summary = await requestOpenRouterSummary({
+      apiKey,
+      model,
+      prompt,
+      system:
+        "You summarize article text for a newsletter. Write 2-3 factual, concise sentences with no hype, no citations, and no preamble.",
+    });
+    if (summary) return summary;
+  }
+
+  return undefined;
+}
+
+async function getOpenRouterSearchSummary(
+  url: string,
+  apiKey: string,
+  articleHint?: string
+): Promise<string | undefined> {
+  return requestOpenRouterSummary({
+    apiKey,
+    model: SEARCH_MODEL_NAME,
+    prompt: buildSearchSummaryPrompt(url, articleHint),
+    system:
+      "You search the web to find and summarize news articles. Provide a 2-3 sentence summary of the key points. Be factual and concise. No hype, no citations, and no preamble.",
+    maxTokens: 250,
+  });
+}
+
+async function requestOpenRouterSummary(options: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  system: string;
+  maxTokens?: number;
+}): Promise<string | undefined> {
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${options.apiKey}`,
         "HTTP-Referer": "https://levine.yet-to-be.com",
         "X-Title": "Levine Links",
       },
       body: JSON.stringify({
-        model: MODEL_NAME,
+        model: options.model,
         messages: [
           {
             role: "system",
-            content:
-              "You summarize article text for a newsletter. Write 2-3 factual, concise sentences with no hype, no citations, and no preamble.",
+            content: options.system,
           },
           {
             role: "user",
-            content: buildOpenRouterPrompt(url, articleText, articleHint),
+            content: options.prompt,
           },
         ],
-        max_tokens: 180,
+        max_tokens: options.maxTokens ?? 180,
         temperature: 0.1,
       }),
     });
@@ -513,8 +542,7 @@ async function getOpenRouterSummary(
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string } }>;
     };
-    const content = data.choices?.[0]?.message?.content;
-    return cleanSummaryContent(content);
+    return cleanSummaryContent(data.choices?.[0]?.message?.content);
   } catch {
     return undefined;
   }
@@ -536,49 +564,7 @@ function buildOpenRouterPrompt(
   return parts.join("\n");
 }
 
-async function getPerplexitySummary(
-  url: string,
-  apiKey: string,
-  articleHint?: string
-): Promise<string | undefined> {
-  try {
-    const userPrompt = buildSummaryPrompt(url, articleHint);
-
-    const response = await fetch("https://api.perplexity.ai/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: "sonar",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You search the web to find and summarize news articles. Provide a 2-3 sentence summary of the key points. Be factual and concise.",
-          },
-          {
-            role: "user",
-            content: userPrompt,
-          },
-        ],
-        max_tokens: 250,
-      }),
-    });
-
-    if (!response.ok) return undefined;
-
-    const data = (await response.json()) as {
-      choices: Array<{ message: { content: string } }>;
-    };
-    return cleanSummaryContent(data.choices[0]?.message?.content);
-  } catch {
-    return undefined;
-  }
-}
-
-function buildSummaryPrompt(url: string, articleHint?: string): string {
+function buildSearchSummaryPrompt(url: string, articleHint?: string): string {
   const safeTitle = articleHint?.trim();
   const slugHint = getArticleSlugHint(url);
 
@@ -597,6 +583,36 @@ function buildSummaryPrompt(url: string, articleHint?: string): string {
   }
 
   return `Search for and summarize the news article at this URL: ${url}`;
+}
+
+function isBloombergArticleUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.hostname.includes("bloomberg.com") &&
+      /\/(news|opinion|features|graphics|businessweek|quote|live)\//.test(
+        parsed.pathname
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getArticleSlugHint(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    const slug = segments.at(-1);
+    if (!slug) return undefined;
+
+    return slug
+      .replace(/[-_]+/g, " ")
+      .replace(/\.(html?)$/i, "")
+      .trim();
+  } catch {
+    return undefined;
+  }
 }
 
 function cleanSummaryContent(content?: string): string | undefined {
@@ -630,36 +646,6 @@ function cleanSummaryContent(content?: string): string | undefined {
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^./, (char) => char.toUpperCase());
-}
-
-function isBloombergArticleUrl(url: string): boolean {
-  try {
-    const parsed = new URL(url);
-    return (
-      parsed.hostname.includes("bloomberg.com") &&
-      /\/(news|opinion|features|graphics|businessweek|quote|live)\//.test(
-        parsed.pathname
-      )
-    );
-  } catch {
-    return false;
-  }
-}
-
-function getArticleSlugHint(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    const segments = parsed.pathname.split("/").filter(Boolean);
-    const slug = segments.at(-1);
-    if (!slug) return undefined;
-
-    return slug
-      .replace(/[-_]+/g, " ")
-      .replace(/\.(html?)$/i, "")
-      .trim();
-  } catch {
-    return undefined;
-  }
 }
 
 async function getArchiveUrl(url: string): Promise<string | undefined> {

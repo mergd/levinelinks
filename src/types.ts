@@ -1,6 +1,5 @@
 export interface Env {
   DB: D1Database;
-  PERPLEXITY_API_KEY: string;
   OPENROUTER_API_KEY?: string;
   RESEND_API_KEY: string;
   SITE_URL: string;
@@ -21,7 +20,6 @@ export interface FetchBatchItem {
 
 export interface FetchBatchRequest {
   items: FetchBatchItem[];
-  perplexityApiKey?: string;
   openRouterApiKey?: string;
 }
 
